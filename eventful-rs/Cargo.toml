@@ -1,0 +1,11 @@
+[package]
+name = "eventful-rs"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+tokio = []
+slint = []
+
+[dependencies]
+eventful-rs-macros = { path = "../eventful-rs-macros" }
