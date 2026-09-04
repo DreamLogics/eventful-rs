@@ -13,7 +13,7 @@ use std::thread;
 type Task = Box<dyn FnOnce() + Send + 'static>;
 
 pub trait EventLoopHandle: Clone + Send + Sync + 'static {
-    fn post<F>(&self, task: F) -> Result<(), PostError>
+    fn post<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static;
 }
@@ -24,20 +24,21 @@ pub struct ShardHandle {
 }
 
 impl EventLoopHandle for ShardHandle {
-    fn post<F>(&self, task: F) -> Result<(), PostError>
+    fn post<F>(&self, task: F)
+    // -> Result<(), PostError>
     where
         F: FnOnce() + Send + 'static,
     {
-        self.sender.send(Box::new(task)).map_err(|_| PostError)
+        let _ = self.sender.send(Box::new(task)); //.map_err(|_| PostError)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PostError;
+// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// pub struct PostError;
 
 pub trait EventLoop {
     fn handle(&self) -> impl EventLoopHandle;
-    fn bind<T>(&self, t: T) -> Evr<T>
+    fn bind<T>(&self, t: T) -> impl EventTargetRef<T>
     where
         T: EventTarget;
 }
@@ -76,7 +77,7 @@ impl EventLoop for Shard {
         self.handle.clone()
     }
 
-    fn bind<T>(&self, t: T) -> Evr<T>
+    fn bind<T>(&self, t: T) -> impl EventTargetRef<T>
     where
         T: EventTarget,
     {
@@ -126,6 +127,14 @@ where
     }
 }
 
+pub trait EventTargetRef<T>
+where
+    T: EventTarget,
+{
+    fn weak(&self) -> Weak<T>;
+    fn event_loop(&self) -> impl EventLoopHandle;
+}
+
 #[derive(Clone)]
 pub struct Evr<T>
 where
@@ -143,16 +152,21 @@ where
         F: FnOnce(&T) + Send + 'static,
     {
         let arc = self.arc.clone();
-        let _ = arc.event_loop().post(move || {
+        arc.event_loop().post(move || {
             f(&arc);
         });
     }
+}
 
-    pub fn weak(&self) -> Weak<T> {
+impl<T> EventTargetRef<T> for Evr<T>
+where
+    T: EventTarget,
+{
+    fn weak(&self) -> Weak<T> {
         Arc::downgrade(&self.arc)
     }
 
-    pub fn event_loop(&self) -> impl EventLoopHandle {
+    fn event_loop(&self) -> impl EventLoopHandle {
         self.arc.event_loop()
     }
 }

@@ -94,7 +94,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
 
             impl #signal_name {
-                pub fn connect<T>(&self, target: &::eventful_rs::Evr<T>)
+                pub fn connect<T>(&self, target: & impl ::eventful_rs::EventTargetRef<T>)
                 where
                     T: #trait_name + ::eventful_rs::EventTarget,
                     #(#arg_types: Clone + Send + 'static,)*
