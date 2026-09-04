@@ -1,4 +1,6 @@
-use eventful_rs::{EventLoop, EventLoopHandle, Shard, accept_events, events, with_events};
+use eventful_rs::{
+    EventLoop, EventLoopHandle, EventTargetRef, Shard, accept_events, events, with_events,
+};
 use std::sync::{Arc, LazyLock};
 use std::thread;
 use std::time::Duration;
@@ -33,6 +35,12 @@ impl Foo {
 #[accept_events(BAR_SHARD)]
 struct Bar;
 
+impl Bar {
+    fn new() -> impl EventTargetRef<Self> {
+        BAR_SHARD.bind(Bar)
+    }
+}
+
 impl FooEvents for Bar {
     fn on_hello(&self, name: String) {
         println!("Bar received on {:?}: {name}", thread::current().name());
@@ -45,7 +53,7 @@ impl FooEvents for Bar {
 
 fn main() {
     let foo = Arc::new(Foo::new("Sera".to_owned()));
-    let bar = BAR_SHARD.bind(Bar);
+    let bar = Bar::new();
 
     foo.on_hello().connect(&bar);
     foo.on_position().connect(&bar);
