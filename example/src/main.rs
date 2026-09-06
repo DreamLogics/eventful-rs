@@ -68,6 +68,5 @@ fn main() {
     .join()
     .unwrap();
 
-    // Give the independent event-loop thread time to drain for this short demo.
-    thread::sleep(Duration::from_millis(100));
+    BAR_SHARD.join();
 }

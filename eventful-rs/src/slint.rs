@@ -16,7 +16,7 @@ impl EventLoopHandle for SlintShardHandle {
     where
         F: FnOnce() + Send + 'static,
     {
-        let _ = self.sender.send(Box::new(task));
+        let _ = self.sender.send(Task::Call(Box::new(task)));
     }
 }
 
@@ -34,8 +34,13 @@ impl SlintShard {
             slint::TimerMode::Repeated,
             Duration::from_millis(10),
             move || {
-                if let Ok(task) = receiver.try_recv() {
-                    let _ = catch_unwind(AssertUnwindSafe(task));
+                while let Ok(task) = receiver.try_recv() {
+                    match task {
+                        Task::Call(task) => {
+                            let _ = catch_unwind(AssertUnwindSafe(task));
+                        }
+                        Task::Stop => (),
+                    }
                 }
             },
         );
@@ -44,6 +49,12 @@ impl SlintShard {
             handle: SlintShardHandle { sender },
             _timer: timer,
         }
+    }
+}
+
+impl Default for SlintShard {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

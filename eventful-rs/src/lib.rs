@@ -10,7 +10,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread;
 
-type Task = Box<dyn FnOnce() + Send + 'static>;
+// type Task = Box<dyn FnOnce() + Send + 'static>;
+
+enum Task {
+    Call(Box<dyn FnOnce() + Send + 'static>),
+    Stop,
+}
 
 pub trait EventLoopHandle: Clone + Send + Sync + 'static {
     fn post<F>(&self, task: F)
@@ -29,7 +34,7 @@ impl EventLoopHandle for ShardHandle {
     where
         F: FnOnce() + Send + 'static,
     {
-        let _ = self.sender.send(Box::new(task)); //.map_err(|_| PostError)
+        let _ = self.sender.send(Task::Call(Box::new(task))); //.map_err(|_| PostError)
     }
 }
 
@@ -45,7 +50,7 @@ pub trait EventLoop {
 
 pub struct Shard {
     handle: ShardHandle,
-    join_handle: thread::JoinHandle<()>,
+    join_handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl Shard {
@@ -55,20 +60,27 @@ impl Shard {
             .name(thread_name.into())
             .spawn(move || {
                 while let Ok(task) = receiver.recv() {
-                    let _ = catch_unwind(AssertUnwindSafe(task));
+                    match task {
+                        Task::Call(f) => {
+                            let _ = catch_unwind(AssertUnwindSafe(f));
+                        }
+                        Task::Stop => break,
+                    }
                 }
             })
             .expect("failed to spawn event-loop thread");
 
         Self {
             handle: ShardHandle { sender },
-            join_handle,
+            join_handle: Mutex::new(Some(join_handle)),
         }
     }
 
-    pub fn join(self) {
-        drop(self.handle);
-        let _ = self.join_handle.join();
+    pub fn join(&self) {
+        if let Some(join_handle) = self.join_handle.lock().unwrap().take() {
+            let _ = self.handle.sender.send(Task::Stop);
+            let _ = join_handle.join();
+        }
     }
 }
 
@@ -90,9 +102,11 @@ pub trait EventTarget: Send + Sync + 'static {
     fn event_loop(&self) -> impl EventLoopHandle;
 }
 
+type TaskFn<Args> = dyn Fn(Args) + Send + Sync + 'static;
+
 /// Type-erased connection storage for one signal signature.
 pub struct Event<Args> {
-    connections: Mutex<Vec<Arc<dyn Fn(Args) + Send + Sync + 'static>>>,
+    connections: Mutex<Vec<Arc<TaskFn<Args>>>>,
 }
 
 impl<Args> Default for Event<Args> {

@@ -1,6 +1,6 @@
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex, Weak},
 };
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::Semaphore;
@@ -10,6 +10,7 @@ use crate::{EventLoop, EventLoopHandle, EventTarget, EventTargetRef, Task};
 #[derive(Clone)]
 pub struct TokioShardHandle {
     sender: tokio::sync::mpsc::Sender<Task>,
+    tokio_rt: Handle,
 }
 
 impl EventLoopHandle for TokioShardHandle {
@@ -17,30 +18,61 @@ impl EventLoopHandle for TokioShardHandle {
     where
         F: FnOnce() + Send + 'static,
     {
-        let _ = self.sender.send(Box::new(task));
+        // let _ = self.sender.send(Task::Call(Box::new(task)));
+        let sender = self.sender.clone();
+        drop(self.tokio_rt.spawn(async move {
+            let _ = sender.send(Task::Call(Box::new(task))).await;
+        }));
     }
 }
 
 pub struct TokioShard {
+    name: String,
     handle: TokioShardHandle,
-    rt: Runtime,
+    rt: Mutex<Option<Runtime>>,
 }
 
 impl TokioShard {
-    pub fn new() -> Self {
+    pub fn new(name: String) -> Self {
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<Task>(Semaphore::MAX_PERMITS);
 
         let rt = Runtime::new().unwrap();
 
         rt.spawn(async move {
             while let Some(task) = receiver.recv().await {
-                let _ = catch_unwind(AssertUnwindSafe(task));
+                match task {
+                    Task::Call(f) => {
+                        let _ = catch_unwind(AssertUnwindSafe(f));
+                    }
+                    Task::Stop => break,
+                }
             }
         });
 
         Self {
-            handle: TokioShardHandle { sender },
-            rt,
+            name,
+            handle: TokioShardHandle {
+                sender,
+                tokio_rt: rt.handle().clone(),
+            },
+            rt: Mutex::new(Some(rt)),
+        }
+    }
+
+    pub fn join(&self) {
+        if let Some(_rt) = self.rt.lock().unwrap().take() {
+            loop {
+                match self.handle.sender.try_send(Task::Stop) {
+                    Ok(_) => break,
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        std::thread::yield_now();
+                    }
+                    Err(e) => {
+                        eprintln!("Error sending stop task for shard {}: {:?}", self.name, e);
+                        break;
+                    }
+                }
+            }
         }
     }
 }
@@ -54,9 +86,10 @@ impl EventLoop for TokioShard {
     where
         T: EventTarget,
     {
+        let handle = self.rt.lock().unwrap().as_ref().unwrap().handle().clone();
         TokioEvr {
             arc: Arc::new(t),
-            tokio_rt: self.rt.handle().clone(),
+            tokio_rt: handle,
         }
     }
 }
