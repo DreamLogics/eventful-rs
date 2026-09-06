@@ -1,11 +1,12 @@
 use eventful_rs::{
-    EventLoop, EventLoopHandle, EventTargetRef, Shard, accept_events, events, with_events,
+    EventLoop, EventLoopHandle, EventTargetRef, Shard, accept_events, events, shard, with_events,
 };
 use std::sync::{Arc, LazyLock};
 use std::thread;
 use std::time::Duration;
 
-static BAR_SHARD: LazyLock<Shard> = LazyLock::new(|| Shard::new("receiver-a"));
+//static BAR_SHARD: LazyLock<Shard> = LazyLock::new(|| Shard::new("receiver-a"));
+shard!(BAR_SHARD);
 
 #[events]
 trait FooEvents {

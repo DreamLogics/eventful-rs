@@ -70,3 +70,10 @@ impl EventLoop for SlintShard {
         Evr { arc: Arc::new(t) }
     }
 }
+
+#[macro_export]
+macro_rules! shard_slint {
+    ($name:ident) => {
+        static $name: LazyLock<SlintShard> = LazyLock::new(|| SlintShard::new());
+    };
+}

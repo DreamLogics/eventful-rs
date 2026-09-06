@@ -139,3 +139,10 @@ where
         self.arc.event_loop()
     }
 }
+
+#[macro_export]
+macro_rules! shard_tokio {
+    ($name:ident) => {
+        static $name: LazyLock<TokioShard> = LazyLock::new(|| TokioShard::new("$name"));
+    };
+}

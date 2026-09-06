@@ -184,3 +184,10 @@ where
         self.arc.event_loop()
     }
 }
+
+#[macro_export]
+macro_rules! shard {
+    ($name:ident) => {
+        static $name: LazyLock<Shard> = LazyLock::new(|| Shard::new("$name"));
+    };
+}
