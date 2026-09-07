@@ -4,12 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
+default = ["tokio", "slint"]
 tokio = ["dep:tokio"]
 slint = ["dep:slint"]
 
 [dependencies]
 eventful-rs-macros = { path = "../eventful-rs-macros" }
-tokio = { version = "1.53.1", features = [
+tokio = { version = "1", features = [
     "sync",
     "rt-multi-thread",
 ], optional = true }

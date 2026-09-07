@@ -1,12 +1,11 @@
-use eventful_rs::{
-    EventLoop, EventLoopHandle, EventTargetRef, Shard, accept_events, events, shard, with_events,
-};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-//static BAR_SHARD: LazyLock<Shard> = LazyLock::new(|| Shard::new("receiver-a"));
-shard!(BAR_SHARD);
+use eventful_rs::{Erc, EventLoop, EventLoopHandle, eventful, shard_std};
+use eventful_rs::{erc, events};
+
+shard_std!(FOO_SHARD);
 
 #[events]
 trait FooEvents {
@@ -14,7 +13,7 @@ trait FooEvents {
     fn on_position(&self, x: f32, y: f32);
 }
 
-#[with_events(FooEvents)]
+#[eventful(FooEvents)]
 struct Foo {
     name: String,
 }
@@ -33,28 +32,34 @@ impl Foo {
     }
 }
 
-#[accept_events(BAR_SHARD)]
-struct Bar;
+mod bar {
+    use eventful_rs::erc;
 
-impl Bar {
-    fn new() -> impl EventTargetRef<Self> {
-        BAR_SHARD.bind(Bar)
+    use super::*;
+    shard_std!(BAR_SHARD);
+    #[eventful]
+    pub struct Bar;
+
+    impl Bar {
+        pub fn new() -> Erc<Self> {
+            erc!(Bar)
+        }
     }
-}
 
-impl FooEvents for Bar {
-    fn on_hello(&self, name: String) {
-        println!("Bar received on {:?}: {name}", thread::current().name());
-    }
+    impl FooEvents for Bar {
+        fn on_hello(&self, name: String) {
+            println!("Bar received on {:?}: {name}", thread::current().name());
+        }
 
-    fn on_position(&self, x: f32, y: f32) {
-        println!("Bar moved to ({x}, {y}) on {:?}", thread::current().name());
+        fn on_position(&self, x: f32, y: f32) {
+            println!("Bar moved to ({x}, {y}) on {:?}", thread::current().name());
+        }
     }
 }
 
 fn main() {
-    let foo = Arc::new(Foo::new("Sera".to_owned()));
-    let bar = Bar::new();
+    let foo = erc!(Foo::new("Sera".to_owned()));
+    let bar = bar::Bar::new();
 
     foo.on_hello().connect(&bar);
     foo.on_position().connect(&bar);
@@ -69,5 +74,5 @@ fn main() {
     .join()
     .unwrap();
 
-    BAR_SHARD.join();
+    bar::BAR_SHARD.join();
 }

@@ -1,4 +1,6 @@
-pub use eventful_rs_macros::{accept_events, events, with_events};
+pub use eventful_rs_macros::{eventful, events, with_actions};
+
+pub mod shard;
 
 #[cfg(feature = "tokio")]
 pub mod tokio;
@@ -6,9 +8,7 @@ pub mod tokio;
 #[cfg(feature = "slint")]
 pub mod slint;
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, Mutex, Weak, mpsc};
-use std::thread;
+use std::sync::{Arc, Mutex, Weak};
 
 // type Task = Box<dyn FnOnce() + Send + 'static>;
 
@@ -18,24 +18,13 @@ enum Task {
 }
 
 pub trait EventLoopHandle: Clone + Send + Sync + 'static {
-    fn post<F>(&self, task: F)
+    fn invoke<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static;
-}
-
-#[derive(Clone)]
-pub struct ShardHandle {
-    sender: mpsc::Sender<Task>,
-}
-
-impl EventLoopHandle for ShardHandle {
-    fn post<F>(&self, task: F)
-    // -> Result<(), PostError>
+    fn invoke_async<F, R>(&self, f: F)
     where
-        F: FnOnce() + Send + 'static,
-    {
-        let _ = self.sender.send(Task::Call(Box::new(task))); //.map_err(|_| PostError)
-    }
+        F: FnOnce() -> R + Send + 'static,
+        R: std::future::Future<Output = ()> + Send + 'static;
 }
 
 // #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,61 +32,12 @@ impl EventLoopHandle for ShardHandle {
 
 pub trait EventLoop {
     fn handle(&self) -> impl EventLoopHandle;
-    fn bind<T>(&self, t: T) -> impl EventTargetRef<T>
+    fn bind<T>(&self, t: T) -> Erc<T>
     where
         T: EventTarget;
 }
 
-pub struct Shard {
-    handle: ShardHandle,
-    join_handle: Mutex<Option<thread::JoinHandle<()>>>,
-}
-
-impl Shard {
-    pub fn new(thread_name: impl Into<String>) -> Self {
-        let (sender, receiver) = mpsc::channel::<Task>();
-        let join_handle = thread::Builder::new()
-            .name(thread_name.into())
-            .spawn(move || {
-                while let Ok(task) = receiver.recv() {
-                    match task {
-                        Task::Call(f) => {
-                            let _ = catch_unwind(AssertUnwindSafe(f));
-                        }
-                        Task::Stop => break,
-                    }
-                }
-            })
-            .expect("failed to spawn event-loop thread");
-
-        Self {
-            handle: ShardHandle { sender },
-            join_handle: Mutex::new(Some(join_handle)),
-        }
-    }
-
-    pub fn join(&self) {
-        if let Some(join_handle) = self.join_handle.lock().unwrap().take() {
-            let _ = self.handle.sender.send(Task::Stop);
-            let _ = join_handle.join();
-        }
-    }
-}
-
-impl EventLoop for Shard {
-    fn handle(&self) -> impl EventLoopHandle {
-        self.handle.clone()
-    }
-
-    fn bind<T>(&self, t: T) -> impl EventTargetRef<T>
-    where
-        T: EventTarget,
-    {
-        Evr { arc: Arc::new(t) }
-    }
-}
-
-/// Implemented by `#[accept_events(...)]` to declare object affinity.
+/// Implemented by `#[eventful(...)]` to declare object affinity.
 pub trait EventTarget: Send + Sync + 'static {
     fn event_loop(&self) -> impl EventLoopHandle;
 }
@@ -141,53 +81,53 @@ where
     }
 }
 
-pub trait EventTargetRef<T>
-where
-    T: EventTarget,
-{
-    fn weak(&self) -> Weak<T>;
-    fn event_loop(&self) -> impl EventLoopHandle;
-}
-
-#[derive(Clone)]
-pub struct Evr<T>
+pub struct Erc<T>
 where
     T: EventTarget,
 {
     arc: Arc<T>,
 }
 
-impl<T> Evr<T>
+impl<T> Erc<T>
 where
     T: EventTarget,
 {
-    pub fn invoke<F>(&self, f: F)
-    where
-        F: FnOnce(&T) + Send + 'static,
-    {
-        let arc = self.arc.clone();
-        arc.event_loop().post(move || {
-            f(&arc);
-        });
-    }
-}
-
-impl<T> EventTargetRef<T> for Evr<T>
-where
-    T: EventTarget,
-{
-    fn weak(&self) -> Weak<T> {
+    pub fn weak(&self) -> Weak<T> {
         Arc::downgrade(&self.arc)
     }
 
-    fn event_loop(&self) -> impl EventLoopHandle {
+    pub fn event_loop(&self) -> impl EventLoopHandle {
         self.arc.event_loop()
+    }
+
+    pub fn get(&self) -> &T {
+        &self.arc
+    }
+}
+
+impl<T> Clone for Erc<T>
+where
+    T: EventTarget,
+{
+    fn clone(&self) -> Self {
+        Self {
+            arc: self.arc.clone(),
+        }
     }
 }
 
 #[macro_export]
-macro_rules! shard {
-    ($name:ident) => {
-        static $name: LazyLock<Shard> = LazyLock::new(|| Shard::new("$name"));
+macro_rules! use_shard {
+    ($name:path) => {
+        fn default_shard() -> &'static impl ::eventful_rs::EventLoop {
+            &$name
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! erc {
+    ($e:expr) => {
+        default_shard().bind($e)
     };
 }
