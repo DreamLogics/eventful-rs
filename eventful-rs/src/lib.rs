@@ -1,4 +1,4 @@
-pub use eventful_rs_macros::{eventful, events, with_actions};
+pub use eventful_rs_macros::{action, eventful, events, with_actions};
 
 pub mod shard;
 
@@ -83,14 +83,14 @@ where
 
 pub struct Erc<T>
 where
-    T: EventTarget,
+    T: EventTarget + ?Sized,
 {
     arc: Arc<T>,
 }
 
 impl<T> Erc<T>
 where
-    T: EventTarget,
+    T: EventTarget + ?Sized,
 {
     pub fn weak(&self) -> Weak<T> {
         Arc::downgrade(&self.arc)
@@ -107,7 +107,7 @@ where
 
 impl<T> Clone for Erc<T>
 where
-    T: EventTarget,
+    T: EventTarget + ?Sized,
 {
     fn clone(&self) -> Self {
         Self {

@@ -34,10 +34,12 @@ impl WebClient {
     where
         T: IntoUrl + Send + 'static,
     {
+        println!("fetch called");
         let response = self.client.get(url).send().await;
         match response {
             Ok(resp) => {
                 if let Ok(text) = resp.text().await {
+                    println!("received text, emitting...");
                     self.emit_on_response(text);
                 }
             }
@@ -45,19 +47,5 @@ impl WebClient {
                 eprintln!("Error fetching URL: {}", e);
             }
         }
-    }
-}
-
-impl WebClientActions for Erc<WebClient> {
-    fn fetch<U>(&self, url: U)
-    where
-        U: IntoUrl + Send + 'static,
-    {
-        let weak = self.weak().clone();
-        self.event_loop().invoke_async(async move || {
-            if let Some(client) = weak.upgrade() {
-                client.fetch(url).await;
-            }
-        });
     }
 }

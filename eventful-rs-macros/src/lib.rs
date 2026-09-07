@@ -127,7 +127,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
         set_fields.push(quote!(pub #method_name: #signal_name));
         extension_signal_methods.push(quote! {
             fn #method_name(&self) -> &#signal_name {
-                &self.get().#set_field().#method_name
+                &self.#set_field().#method_name
             }
         });
         extension_emitter_methods.push(quote! {
@@ -135,7 +135,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
             where
                 #(#arg_types: Clone + Send + 'static,)*
             {
-                self.#method_name().emit(#(#arg_names),*);
+                self.#set_field().#method_name.emit(#(#arg_names),*);
             }
         });
     }
@@ -162,7 +162,11 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
             #(#extension_emitter_methods)*
         }
 
-        impl<T: #has_name + ?Sized> #ext_signals_name for ::eventful_rs::Erc<T> {}
+        impl<T> #ext_signals_name for ::eventful_rs::Erc<T>
+        where
+            T: ::eventful_rs::EventTarget + ?Sized,
+            ::eventful_rs::Erc<T>: #has_name,
+        {}
 
         impl<T: #has_name + ?Sized> #ext_emitter_name for T {}
     }
@@ -461,25 +465,23 @@ pub fn with_actions(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     let is_async = sig.asyncness.is_some();
                     let mut trait_sig = sig.clone();
                     trait_sig.asyncness = None;
-                    method_signature.push(trait_sig);
+                    method_signature.push(trait_sig.clone());
 
                     // generate an implementation for the method in the impl block
                     let method_impl = if is_async {
                         quote! {
-                            quote! {
-                                #sig {
-                                    let weak = self.weak().clone();
-                                    self.event_loop().invoke_async(async move || {
-                                        if let Some(target) = weak.upgrade() {
-                                            target.#method_name(#(#method_arg_names,)*).await;
-                                        }
-                                    });
-                                }
+                            #trait_sig {
+                                let weak = self.weak().clone();
+                                self.event_loop().invoke_async(async move || {
+                                    if let Some(target) = weak.upgrade() {
+                                        target.#method_name(#(#method_arg_names,)*).await;
+                                    }
+                                });
                             }
                         }
                     } else {
                         quote! {
-                            #sig {
+                            #trait_sig {
                                 let weak = self.weak().clone();
                                 self.event_loop().invoke(move || {
                                     if let Some(target) = weak.upgrade() {
@@ -493,6 +495,13 @@ pub fn with_actions(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
         }
+    }
+
+    if method_signature.len() == 0 {
+        return quote! {
+            #item
+        }
+        .into();
     }
 
     quote! {
@@ -585,8 +594,22 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &self.#set_field
             }
         }
+
+        impl #impl_generics #has_name
+            for ::eventful_rs::Erc<#struct_name #type_generics>
+            #where_clause
+        {
+            fn #set_field(&self) -> &#set_name {
+                &self.get().#set_field
+            }
+        }
     }
     .into()
+}
+
+#[proc_macro_attribute]
+pub fn action(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
 }
 
 fn pascal(value: &str) -> String {

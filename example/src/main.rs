@@ -64,15 +64,13 @@ fn main() {
     foo.on_hello().connect(&bar);
     foo.on_position().connect(&bar);
 
-    let emitter = Arc::clone(&foo);
-    thread::spawn(move || {
+    let emitter = foo.clone();
+    FOO_SHARD.handle().invoke(move || {
         for _ in 0..3 {
-            emitter.say_hello();
+            emitter.get().say_hello();
             thread::sleep(Duration::from_millis(100));
         }
-    })
-    .join()
-    .unwrap();
+    });
 
     bar::BAR_SHARD.join();
 }
