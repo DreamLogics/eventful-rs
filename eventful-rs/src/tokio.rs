@@ -27,6 +27,7 @@ impl EventLoopHandle for TokioShardHandle {
         R: std::future::Future<Output = ()> + Send + 'static,
     {
         drop(self.tokio_rt.spawn(async move {
+            println!("TokioShardHandle::invoke_async called");
             f().await;
         }));
     }
@@ -39,7 +40,11 @@ pub struct TokioShard {
 
 impl TokioShard {
     pub fn new() -> Self {
-        let rt = Runtime::new().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
 
         Self {
             handle: TokioShardHandle {
@@ -47,6 +52,14 @@ impl TokioShard {
             },
             rt: Mutex::new(Some(rt)),
         }
+    }
+
+    pub fn run<F, R>(&self, main_fn: F) -> R::Output
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Future,
+    {
+        self.handle.tokio_rt.block_on(main_fn())
     }
 
     pub fn join(&self) {

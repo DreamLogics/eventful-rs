@@ -2,10 +2,9 @@ use eventful_rs::*;
 
 use crate::web::*;
 
-mod expanded;
 mod web;
 
-shard_std!(MAIN_SHARD);
+shard_local!(MAIN_SHARD);
 
 #[eventful]
 struct App {
@@ -34,6 +33,7 @@ impl App {
 impl WebClientEvents for App {
     fn on_response(&self, content: String) {
         println!("Received response: {}", content);
+        MAIN_SHARD.exit();
     }
 }
 
@@ -41,6 +41,6 @@ fn main() {
     let app = App::new();
     app.run();
 
+    MAIN_SHARD.run_event_loop();
     TOKIO_WEB.join();
-    MAIN_SHARD.join();
 }

@@ -1,5 +1,7 @@
 pub use eventful_rs_macros::{action, eventful, events, with_actions};
 
+pub mod local;
+
 pub mod shard;
 
 #[cfg(feature = "tokio")]
