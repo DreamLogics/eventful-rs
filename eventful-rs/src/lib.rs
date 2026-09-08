@@ -1,5 +1,8 @@
 pub use eventful_rs_macros::{action, eventful, events, with_actions};
 
+mod handle;
+pub use handle::*;
+
 pub mod local;
 
 pub mod shard;
