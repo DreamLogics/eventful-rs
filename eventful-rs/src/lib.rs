@@ -1,4 +1,4 @@
-pub use eventful_rs_macros::{action, eventful, events, with_actions};
+pub use eventful_rs_macros::{action, asynchronize, eventful, events};
 
 mod handle;
 pub use handle::*;
@@ -30,6 +30,17 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
     where
         F: FnOnce() -> R + Send + 'static,
         R: std::future::Future<Output = ()> + Send + 'static;
+    fn invoke_and_then<F, C, R>(&self, task: F, callback: C)
+    where
+        F: FnOnce() -> R + Send + 'static,
+        C: FnOnce(R) + Send + 'static,
+        R: Send + 'static;
+    fn invoke_async_and_then<F, R, C, T>(&self, f: F, callback: C)
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: std::future::Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+        C: FnOnce(T) + Send + 'static;
 }
 
 // #[derive(Debug, Clone, Copy, PartialEq, Eq)]
