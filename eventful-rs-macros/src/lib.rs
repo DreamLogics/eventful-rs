@@ -388,7 +388,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
 // }
 
 #[proc_macro_attribute]
-pub fn with_actions(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let item = parse_macro_input!(item as ItemImpl);
     let struct_type = &item.self_ty;
     let struct_name = if let Type::Path(type_path) = &**struct_type {
@@ -398,12 +398,11 @@ pub fn with_actions(_attr: TokenStream, item: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
     };
-    let trait_name = format_ident!("{}Actions", struct_name);
+    let trait_name = format_ident!("{}Async", struct_name);
     let (impl_generics, type_generics, where_clause) = item.generics.split_for_impl();
-    let mut method_signature = Vec::new();
-    let mut method_implementation = Vec::new();
+    let mut action_method_signature = Vec::new();
+    let mut action_method_implementation = Vec::new();
 
-    // look for methods with the `#[action]` attribute
     for method in item.items.iter() {
         if let syn::ImplItem::Fn(method) = method {
             for attr in &method.attrs {
@@ -465,7 +464,7 @@ pub fn with_actions(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     let is_async = sig.asyncness.is_some();
                     let mut trait_sig = sig.clone();
                     trait_sig.asyncness = None;
-                    method_signature.push(trait_sig.clone());
+                    action_method_signature.push(trait_sig.clone());
 
                     // generate an implementation for the method in the impl block
                     let method_impl = if is_async {
@@ -491,13 +490,76 @@ pub fn with_actions(_attr: TokenStream, item: TokenStream) -> TokenStream {
                             }
                         }
                     };
-                    method_implementation.push(method_impl);
+                    action_method_implementation.push(method_impl);
+                } else if attr.path().is_ident("asynchronize") {
+                    // convert method access to an async call
+                    // call is invoked on the shard that owns this target
+                    // then the result is sent back to the shard from where the call originated from
+                    let sig = &method.sig;
+
+                    let method_name = &sig.ident;
+                    let mut method_arg_names = Vec::new();
+                    // let mut method_generic_arg_names = Vec::new();
+
+                    for input in &sig.inputs {
+                        match input {
+                            FnArg::Receiver(_) => {}
+                            FnArg::Typed(arg) => {
+                                let Pat::Ident(pat) = arg.pat.as_ref() else {
+                                    return syn::Error::new_spanned(
+                                        &arg.pat,
+                                        "action arguments must be simple identifiers",
+                                    )
+                                    .to_compile_error()
+                                    .into();
+                                };
+                                method_arg_names.push(pat.ident.clone());
+                            }
+                        }
+                    }
+
+                    // for generic in &sig.generics.params {
+                    //     if let syn::GenericParam::Type(type_param) = generic {
+                    //         method_generic_arg_names.push(type_param.ident.clone());
+                    //     }
+                    // }
+
+                    let is_async = sig.asyncness.is_some();
+                    let mut trait_sig = sig.clone();
+                    trait_sig.asyncness = None;
+                    action_method_signature.push(trait_sig.clone());
+
+                    // generate an implementation for the method in the impl block
+                    let method_impl = if is_async {
+                        quote! {
+                            #trait_sig {
+                                let weak = self.weak().clone();
+                                self.event_loop().invoke_async(async move || {
+                                    if let Some(target) = weak.upgrade() {
+                                        target.#method_name(#(#method_arg_names,)*).await;
+                                    }
+                                });
+                            }
+                        }
+                    } else {
+                        quote! {
+                            #trait_sig {
+                                let weak = self.weak().clone();
+                                self.event_loop().invoke(move || {
+                                    if let Some(target) = weak.upgrade() {
+                                        target.#method_name(#(#method_arg_names,)*);
+                                    }
+                                });
+                            }
+                        }
+                    };
+                    action_method_implementation.push(method_impl);
                 }
             }
         }
     }
 
-    if method_signature.len() == 0 {
+    if action_method_signature.len() == 0 {
         return quote! {
             #item
         }
@@ -508,11 +570,11 @@ pub fn with_actions(_attr: TokenStream, item: TokenStream) -> TokenStream {
         #item
 
         pub trait #trait_name {
-            #(#method_signature;)*
+            #(#action_method_signature;)*
         }
 
         impl #impl_generics #trait_name for ::eventful_rs::Erc<#struct_name #type_generics> #where_clause {
-            #(#method_implementation)*
+            #(#action_method_implementation)*
         }
     }.into()
 }

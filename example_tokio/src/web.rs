@@ -20,7 +20,7 @@ pub struct WebClient {
     client: reqwest::Client,
 }
 
-#[with_actions]
+#[asynchronize]
 impl WebClient {
     pub fn new() -> Erc<Self> {
         erc!(WebClient {

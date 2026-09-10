@@ -11,7 +11,7 @@ struct App {
     web_client: Erc<web::WebClient>,
 }
 
-#[with_actions]
+#[asynchronize]
 impl App {
     fn new() -> Erc<Self> {
         let web_client = web::WebClient::new();
