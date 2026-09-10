@@ -1,5 +1,7 @@
 pub use eventful_rs_macros::{action, eventful, events, with_actions};
 
+mod shard_futures;
+
 mod handle;
 pub use handle::*;
 

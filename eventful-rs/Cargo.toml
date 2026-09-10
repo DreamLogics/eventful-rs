@@ -10,6 +10,7 @@ slint = ["dep:slint"]
 
 [dependencies]
 eventful-rs-macros = { path = "../eventful-rs-macros" }
+futures = "0.3"
 tokio = { version = "1", features = [
     "sync",
     "rt-multi-thread",

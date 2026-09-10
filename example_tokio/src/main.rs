@@ -27,6 +27,7 @@ impl App {
     fn run(&self) {
         let url = "https://www.rust-lang.org";
         self.web_client.fetch(url);
+        // self.web_client.
     }
 }
 

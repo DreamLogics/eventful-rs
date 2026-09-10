@@ -62,8 +62,6 @@ where
                     ManuallyDrop::drop(&mut w);
                 }
             }
-
-            // t drops here, but t.weak == None, so Drop is a no-op.
         });
     }
 }

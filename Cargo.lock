@@ -1161,6 +1161,7 @@ name = "eventful-rs"
 version = "0.1.0"
 dependencies = [
  "eventful-rs-macros",
+ "futures",
  "slint",
  "tokio",
 ]
