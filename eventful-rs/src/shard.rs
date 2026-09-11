@@ -9,11 +9,11 @@ use std::{
 use crate::{EventLoop, EventLoopHandle, EventTarget, HasEvents, Task};
 
 #[derive(Clone)]
-pub struct ShardHandle {
+pub struct ShardEventHandle {
     sender: mpsc::Sender<Task>,
 }
 
-impl EventLoopHandle for ShardHandle {
+impl EventLoopHandle for ShardEventHandle {
     fn invoke<F>(&self, task: F)
     // -> Result<(), PostError>
     where
@@ -32,7 +32,7 @@ impl EventLoopHandle for ShardHandle {
 }
 
 pub struct Shard {
-    handle: ShardHandle,
+    handle: ShardEventHandle,
     join_handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
@@ -54,7 +54,7 @@ impl Shard {
             .expect("failed to spawn event-loop thread");
 
         Self {
-            handle: ShardHandle { sender },
+            handle: ShardEventHandle { sender },
             join_handle: Mutex::new(Some(join_handle)),
         }
     }
@@ -68,18 +68,10 @@ impl Shard {
 }
 
 impl EventLoop for Shard {
-    type HandleType = ShardHandle;
+    type HandleType = ShardEventHandle;
 
     fn handle(&self) -> Self::HandleType {
         self.handle.clone()
-    }
-
-    fn asynchronize<T, S>(&self, t: &std::rc::Rc<T>) -> crate::ShardHandle<T, Self::HandleType, S>
-    where
-        T: HasEvents<S> + ?Sized + 'static,
-        S: ?Sized + Send + 'static,
-    {
-        crate::ShardHandle::new(t, self.handle.clone())
     }
 
     // fn bind<T>(&self, t: T) -> Erc<T>
@@ -95,6 +87,7 @@ macro_rules! shard_std {
     ($name:ident) => {
         pub static $name: ::std::sync::LazyLock<::eventful_rs::shard::Shard> =
             ::std::sync::LazyLock::new(|| ::eventful_rs::shard::Shard::new("$name"));
+        type DefaultShardType = ::eventful_rs::shard::Shard;
         fn default_shard() -> &'static ::eventful_rs::shard::Shard {
             &$name
         }

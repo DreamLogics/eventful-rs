@@ -104,14 +104,6 @@ impl EventLoop for TokioShard {
         self.handle.clone()
     }
 
-    fn asynchronize<T, S>(&self, t: &std::rc::Rc<T>) -> crate::ShardHandle<T, Self::HandleType, S>
-    where
-        T: HasEvents<S> + ?Sized + 'static,
-        S: ?Sized + Send + 'static,
-    {
-        crate::ShardHandle::new(t, self.handle.clone())
-    }
-
     // fn bind<T>(&self, t: T) -> Erc<T>
     // where
     //     T: EventTarget,

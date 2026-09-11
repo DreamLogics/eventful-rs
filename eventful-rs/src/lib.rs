@@ -48,6 +48,12 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
     //     C: FnOnce(T) + Send + 'static;
 }
 
+pub trait Eventful {
+    type EventSetType: ?Sized + Send + 'static;
+    type EventsTraitType: ?Sized + Send + 'static;
+    type EventLoopHandleType: EventLoopHandle;
+}
+
 pub trait HasEvents<E>
 where
     E: ?Sized + Send + 'static,
@@ -65,10 +71,6 @@ pub trait EventLoop {
     // fn bind<T>(&self, t: T) -> Erc<T>
     // where
     //     T: EventTarget;
-    fn asynchronize<T, S>(&self, t: &Rc<T>) -> ShardHandle<T, Self::HandleType, S>
-    where
-        T: HasEvents<S> + ?Sized + 'static,
-        S: ?Sized + Send + 'static;
 }
 
 /// Implemented by `#[eventful(...)]` to declare object affinity.
@@ -121,5 +123,12 @@ macro_rules! use_shard {
         fn default_shard() -> &'static impl ::eventful_rs::EventLoop {
             &$name
         }
+    };
+}
+
+#[macro_export]
+macro_rules! sharded {
+    ($e:expr) => {
+        ::eventful_rs::ShardRc::new($e, default_shard().handle())
     };
 }

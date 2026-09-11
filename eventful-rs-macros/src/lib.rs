@@ -487,6 +487,14 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
+        impl #impl_generics ::eventful_rs::Eventful
+            for #struct_name #type_generics #where_clause
+        {
+            type EventSetType = #set_name;
+            type EventsTraitType = #trait_ident;
+            type EventLoopHandleType = DefaultShardType::HandleType;
+        }
+
     }
     .into()
 }

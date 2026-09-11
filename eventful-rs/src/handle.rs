@@ -1,192 +1,200 @@
-use std::{any::Any, collections::HashMap, rc::Rc};
+use std::{
+    default,
+    mem::ManuallyDrop,
+    rc::{Rc, Weak},
+    sync::Arc,
+    thread::{self, ThreadId},
+};
 
-pub struct ShardObjectStore {
-    next_id: usize,
-    objects: HashMap<usize, Rc<dyn Any>>,
-}
+use crate::{EventLoopHandle, Eventful, HasEvents};
 
-pub struct ShardHandle<T, H>
+struct WeakWrapper<T, H>
 where
     T: ?Sized + 'static,
     H: EventLoopHandle,
 {
-    id: usize,
+    weak: Option<ManuallyDrop<Weak<T>>>,
     shard_handle: H,
-    _marker: std::marker::PhantomData<T>,
+    thread_id: ThreadId,
 }
 
-pub struct ShardRc<T, H>
+impl<T, H> WeakWrapper<T, H>
 where
     T: ?Sized + 'static,
     H: EventLoopHandle,
 {
-    id: usize,
-    shard_handle: H,
-    _marker: std::marker::PhantomData<T>,
+    fn new(weak: Weak<T>, shard_handle: H) -> Self {
+        Self {
+            weak: Some(ManuallyDrop::new(weak)),
+            shard_handle,
+            thread_id: thread::current().id(),
+        }
+    }
+
+    fn upgrade(&self) -> Option<Rc<T>> {
+        assert_eq!(thread::current().id(), self.thread_id);
+        self.weak.as_ref().and_then(|w| w.upgrade())
+    }
 }
 
-// use std::{
-//     default,
-//     mem::ManuallyDrop,
-//     rc::{Rc, Weak},
-//     sync::Arc,
-//     thread::{self, ThreadId},
-// };
+impl<T, H> Drop for WeakWrapper<T, H>
+where
+    T: ?Sized + 'static,
+    H: EventLoopHandle,
+{
+    fn drop(&mut self) {
+        let Some(w) = self.weak.take() else {
+            return;
+        };
 
-// use crate::{EventLoopHandle, HasEvents};
+        let t = WeakWrapper {
+            weak: Some(w),
+            shard_handle: self.shard_handle.clone(),
+            thread_id: self.thread_id,
+        };
 
-// struct WeakWrapper<T, H>
-// where
-//     T: ?Sized + 'static,
-//     H: EventLoopHandle,
-// {
-//     weak: Option<ManuallyDrop<Weak<T>>>,
-//     shard_handle: H,
-//     thread_id: ThreadId,
-// }
+        self.shard_handle.invoke(move || {
+            assert_eq!(thread::current().id(), t.thread_id);
 
-// impl<T, H> WeakWrapper<T, H>
-// where
-//     T: ?Sized + 'static,
-//     H: EventLoopHandle,
-// {
-//     fn new(weak: Weak<T>, shard_handle: H) -> Self {
-//         Self {
-//             weak: Some(ManuallyDrop::new(weak)),
-//             shard_handle,
-//             thread_id: thread::current().id(),
-//         }
-//     }
+            let mut t = t;
 
-//     fn upgrade(&self) -> Option<Rc<T>> {
-//         assert_eq!(thread::current().id(), self.thread_id);
-//         self.weak.as_ref().and_then(|w| w.upgrade())
-//     }
-// }
+            if let Some(mut w) = t.weak.take() {
+                unsafe {
+                    ManuallyDrop::drop(&mut w);
+                }
+            }
+        });
+    }
+}
 
-// impl<T, H> Drop for WeakWrapper<T, H>
-// where
-//     T: ?Sized + 'static,
-//     H: EventLoopHandle,
-// {
-//     fn drop(&mut self) {
-//         let Some(w) = self.weak.take() else {
-//             return;
-//         };
+unsafe impl<T, H> Send for WeakWrapper<T, H>
+where
+    T: ?Sized + 'static,
+    H: EventLoopHandle,
+{
+}
 
-//         let t = WeakWrapper {
-//             weak: Some(w),
-//             shard_handle: self.shard_handle.clone(),
-//             thread_id: self.thread_id,
-//         };
+unsafe impl<T, H> Sync for WeakWrapper<T, H>
+where
+    T: ?Sized + 'static,
+    H: EventLoopHandle,
+{
+}
 
-//         self.shard_handle.invoke(move || {
-//             assert_eq!(thread::current().id(), t.thread_id);
+pub struct ShardHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
+{
+    object: Arc<WeakWrapper<T, T::EventLoopHandleType>>,
+    shard_handle: T::EventLoopHandleType,
+    events: Arc<T::EventSetType>,
+}
 
-//             let mut t = t;
+impl<T> ShardHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
+{
+    pub(crate) fn new(object: &Rc<T>, shard_handle: T::EventLoopHandleType) -> Self {
+        Self {
+            object: Arc::new(WeakWrapper::new(
+                Rc::downgrade(object),
+                shard_handle.clone(),
+            )),
+            shard_handle,
+            events: object.events().clone(),
+        }
+    }
 
-//             if let Some(mut w) = t.weak.take() {
-//                 unsafe {
-//                     ManuallyDrop::drop(&mut w);
-//                 }
-//             }
-//         });
-//     }
-// }
+    pub fn in_shard<F>(&self, f: F)
+    where
+        F: FnOnce(&T) + Send + 'static,
+    {
+        let handle = self.clone();
+        self.shard_handle.invoke(move || {
+            handle.invoke(f);
+        });
+    }
 
-// unsafe impl<T, H> Send for WeakWrapper<T, H>
-// where
-//     T: ?Sized + 'static,
-//     H: EventLoopHandle,
-// {
-// }
+    fn invoke<F>(&self, f: F)
+    where
+        F: FnOnce(&T) + Send + 'static,
+    {
+        if let Some(object) = self.object.upgrade() {
+            f(&object);
+        }
+    }
 
-// unsafe impl<T, H> Sync for WeakWrapper<T, H>
-// where
-//     T: ?Sized + 'static,
-//     H: EventLoopHandle,
-// {
-// }
+    pub fn events(&self) -> &Arc<T::EventSetType> {
+        &self.events
+    }
+}
 
-// pub struct ShardHandle<T, H, S>
-// where
-//     T: ?Sized + 'static,
-//     H: EventLoopHandle,
-//     S: ?Sized + Send + 'static,
-// {
-//     object: Arc<WeakWrapper<T, H>>,
-//     shard_handle: H,
-//     events: Arc<S>,
-// }
+impl<T> Clone for ShardHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            object: self.object.clone(),
+            shard_handle: self.shard_handle.clone(),
+            events: self.events.clone(),
+        }
+    }
+}
 
-// impl<T, H, S> ShardHandle<T, H, S>
-// where
-//     T: HasEvents<S> + ?Sized + 'static,
-//     H: EventLoopHandle,
-//     S: ?Sized + Send + 'static,
-// {
-//     pub(crate) fn new(object: &Rc<T>, shard_handle: H) -> Self {
-//         Self {
-//             object: Arc::new(WeakWrapper::new(
-//                 Rc::downgrade(object),
-//                 shard_handle.clone(),
-//             )),
-//             shard_handle,
-//             events: object.events().clone(),
-//         }
-//     }
+unsafe impl<T> Send for ShardHandle<T> where
+    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static
+{
+}
 
-//     pub fn in_shard<F>(&self, f: F)
-//     where
-//         F: FnOnce(&T) + Send + 'static,
-//     {
-//         let handle = self.clone();
-//         self.shard_handle.invoke(move || {
-//             handle.invoke(f);
-//         });
-//     }
+unsafe impl<T> Sync for ShardHandle<T> where
+    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static
+{
+}
 
-//     fn invoke<F>(&self, f: F)
-//     where
-//         F: FnOnce(&T) + Send + 'static,
-//     {
-//         if let Some(object) = self.object.upgrade() {
-//             f(&object);
-//         }
-//     }
+pub struct ShardRc<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
+{
+    inner: Rc<T>,
+    shard_handle: T::EventLoopHandleType,
+}
 
-//     pub fn events(&self) -> &Arc<S> {
-//         &self.events
-//     }
-// }
+impl<T> ShardRc<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
+{
+    pub fn new(value: T, shard_handle: T::EventLoopHandleType) -> Self {
+        Self {
+            inner: Rc::new(value),
+            shard_handle,
+        }
+    }
 
-// impl<T, H, S> Clone for ShardHandle<T, H, S>
-// where
-//     T: ?Sized + 'static,
-//     H: EventLoopHandle,
-//     S: ?Sized + Send + 'static,
-// {
-//     fn clone(&self) -> Self {
-//         Self {
-//             object: self.object.clone(),
-//             shard_handle: self.shard_handle.clone(),
-//             events: self.events.clone(),
-//         }
-//     }
-// }
+    pub fn asynchronize(&self) -> ShardHandle<T> {
+        ShardHandle::new(&self.inner, self.shard_handle.clone())
+    }
+}
 
-// unsafe impl<T, H, S> Send for ShardHandle<T, H, S>
-// where
-//     T: ?Sized + 'static,
-//     H: EventLoopHandle,
-//     S: ?Sized + Send + 'static,
-// {
-// }
+impl<T> Clone for ShardRc<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            shard_handle: self.shard_handle.clone(),
+        }
+    }
+}
 
-// unsafe impl<T, H, S> Sync for ShardHandle<T, H, S>
-// where
-//     T: ?Sized + 'static,
-//     H: EventLoopHandle,
-//     S: ?Sized + Send + 'static,
-// {
-// }
+impl<T> std::ops::Deref for ShardRc<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}

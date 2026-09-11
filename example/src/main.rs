@@ -36,16 +36,17 @@ impl Foo {
 }
 
 mod bar {
-    use std::rc::Rc;
+    use eventful_rs::{ShardRc, shard::ShardEventHandle, sharded};
 
     use super::*;
     shard_std!(BAR_SHARD);
+
     #[eventful]
     pub struct Bar;
 
     impl Bar {
-        pub fn new() -> Rc<Self> {
-            Rc::new(Bar {
+        pub fn new() -> ShardRc<Self> {
+            sharded!(Bar {
                 events: Default::default(),
             })
         }
