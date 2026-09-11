@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
-use crate::{Erc, EventLoop, EventLoopHandle, EventTarget};
+use crate::{EventLoop, EventLoopHandle, EventTarget, HasEvents};
 
 #[derive(Clone)]
 pub struct SlintShardHandle;
@@ -46,16 +46,26 @@ impl Default for SlintShard {
 }
 
 impl EventLoop for SlintShard {
-    fn handle(&self) -> impl EventLoopHandle {
+    type HandleType = SlintShardHandle;
+
+    fn handle(&self) -> Self::HandleType {
         self.handle.clone()
     }
 
-    fn bind<T>(&self, t: T) -> Erc<T>
+    fn asynchronize<T, S>(&self, t: &std::rc::Rc<T>) -> crate::ShardHandle<T, Self::HandleType, S>
     where
-        T: EventTarget,
+        T: HasEvents<S> + ?Sized + 'static,
+        S: ?Sized + Send + 'static,
     {
-        Erc { arc: Arc::new(t) }
+        crate::ShardHandle::new(t, self.handle.clone())
     }
+
+    // fn bind<T>(&self, t: T) -> Erc<T>
+    // where
+    //     T: EventTarget,
+    // {
+    //     Erc { arc: Arc::new(t) }
+    // }
 }
 
 #[macro_export]

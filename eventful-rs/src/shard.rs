@@ -1,11 +1,12 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use std::rc::Rc;
 use std::{
     sync::{Arc, Mutex, mpsc},
     thread,
 };
 
-use crate::{Erc, EventLoop, EventLoopHandle, EventTarget, Task};
+use crate::{EventLoop, EventLoopHandle, EventTarget, HasEvents, Task};
 
 #[derive(Clone)]
 pub struct ShardHandle {
@@ -67,16 +68,26 @@ impl Shard {
 }
 
 impl EventLoop for Shard {
-    fn handle(&self) -> impl EventLoopHandle {
+    type HandleType = ShardHandle;
+
+    fn handle(&self) -> Self::HandleType {
         self.handle.clone()
     }
 
-    fn bind<T>(&self, t: T) -> Erc<T>
+    fn asynchronize<T, S>(&self, t: &std::rc::Rc<T>) -> crate::ShardHandle<T, Self::HandleType, S>
     where
-        T: EventTarget,
+        T: HasEvents<S> + ?Sized + 'static,
+        S: ?Sized + Send + 'static,
     {
-        Erc { arc: Arc::new(t) }
+        crate::ShardHandle::new(t, self.handle.clone())
     }
+
+    // fn bind<T>(&self, t: T) -> Erc<T>
+    // where
+    //     T: EventTarget,
+    // {
+    //     Erc { arc: Arc::new(t) }
+    // }
 }
 
 #[macro_export]

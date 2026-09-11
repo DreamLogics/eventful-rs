@@ -1,10 +1,11 @@
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 use tokio::runtime::{Handle, Runtime};
 
-use crate::{Erc, EventLoop, EventLoopHandle, EventTarget};
+use crate::{EventLoop, EventLoopHandle, EventTarget, HasEvents};
 
 #[derive(Clone)]
 pub struct TokioShardHandle {
@@ -27,10 +28,33 @@ impl EventLoopHandle for TokioShardHandle {
         R: std::future::Future<Output = ()> + Send + 'static,
     {
         drop(self.tokio_rt.spawn(async move {
-            println!("TokioShardHandle::invoke_async called");
             f().await;
         }));
     }
+
+    // fn invoke_and_then<F, C, R>(&self, task: F, callback: C)
+    // where
+    //     F: FnOnce() -> R + Send + 'static,
+    //     C: FnOnce(R) + Send + 'static,
+    //     R: Send + 'static,
+    // {
+    //     drop(self.tokio_rt.spawn(async move {
+    //         //let _ = catch_unwind(AssertUnwindSafe(task));
+    //         callback(task());
+    //     }));
+    // }
+
+    // fn invoke_async_and_then<F, R, C, T>(&self, f: F, callback: C)
+    // where
+    //     F: FnOnce() -> R + Send + 'static,
+    //     R: std::future::Future<Output = T> + Send + 'static,
+    //     T: Send + 'static,
+    //     C: FnOnce(T) + Send + 'static,
+    // {
+    //     drop(self.tokio_rt.spawn(async move {
+    //         callback(f().await);
+    //     }));
+    // }
 }
 
 pub struct TokioShard {
@@ -74,16 +98,26 @@ impl Default for TokioShard {
 }
 
 impl EventLoop for TokioShard {
-    fn handle(&self) -> impl EventLoopHandle {
+    type HandleType = TokioShardHandle;
+
+    fn handle(&self) -> Self::HandleType {
         self.handle.clone()
     }
 
-    fn bind<T>(&self, t: T) -> Erc<T>
+    fn asynchronize<T, S>(&self, t: &std::rc::Rc<T>) -> crate::ShardHandle<T, Self::HandleType, S>
     where
-        T: EventTarget,
+        T: HasEvents<S> + ?Sized + 'static,
+        S: ?Sized + Send + 'static,
     {
-        Erc { arc: Arc::new(t) }
+        crate::ShardHandle::new(t, self.handle.clone())
     }
+
+    // fn bind<T>(&self, t: T) -> Erc<T>
+    // where
+    //     T: EventTarget,
+    // {
+    //     Erc { arc: Arc::new(t) }
+    // }
 }
 
 #[macro_export]

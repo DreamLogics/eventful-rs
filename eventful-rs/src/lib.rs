@@ -15,7 +15,10 @@ pub mod tokio;
 #[cfg(feature = "slint")]
 pub mod slint;
 
-use std::sync::{Arc, Mutex, Weak};
+use std::{
+    rc::Rc,
+    sync::{Arc, Mutex, Weak},
+};
 
 // type Task = Box<dyn FnOnce() + Send + 'static>;
 
@@ -32,27 +35,40 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
     where
         F: FnOnce() -> R + Send + 'static,
         R: std::future::Future<Output = ()> + Send + 'static;
-    fn invoke_and_then<F, C, R>(&self, task: F, callback: C)
-    where
-        F: FnOnce() -> R + Send + 'static,
-        C: FnOnce(R) + Send + 'static,
-        R: Send + 'static;
-    fn invoke_async_and_then<F, R, C, T>(&self, f: F, callback: C)
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: std::future::Future<Output = T> + Send + 'static,
-        T: Send + 'static,
-        C: FnOnce(T) + Send + 'static;
+    // fn invoke_and_then<F, C, R>(&self, task: F, callback: C)
+    // where
+    //     F: FnOnce() -> R + Send + 'static,
+    //     C: FnOnce(R) + Send + 'static,
+    //     R: Send + 'static;
+    // fn invoke_async_and_then<F, R, C, T>(&self, f: F, callback: C)
+    // where
+    //     F: FnOnce() -> R + Send + 'static,
+    //     R: std::future::Future<Output = T> + Send + 'static,
+    //     T: Send + 'static,
+    //     C: FnOnce(T) + Send + 'static;
+}
+
+pub trait HasEvents<E>
+where
+    E: ?Sized + Send + 'static,
+{
+    fn events(&self) -> &Arc<E>;
 }
 
 // #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // pub struct PostError;
 
 pub trait EventLoop {
-    fn handle(&self) -> impl EventLoopHandle;
-    fn bind<T>(&self, t: T) -> Erc<T>
+    type HandleType: EventLoopHandle;
+
+    fn handle(&self) -> Self::HandleType;
+    // fn bind<T>(&self, t: T) -> Erc<T>
+    // where
+    //     T: EventTarget;
+    fn asynchronize<T, S>(&self, t: &Rc<T>) -> ShardHandle<T, Self::HandleType, S>
     where
-        T: EventTarget;
+        T: HasEvents<S> + ?Sized + 'static,
+        S: ?Sized + Send + 'static;
 }
 
 /// Implemented by `#[eventful(...)]` to declare object affinity.
@@ -99,53 +115,11 @@ where
     }
 }
 
-pub struct Erc<T>
-where
-    T: EventTarget + ?Sized,
-{
-    arc: Arc<T>,
-}
-
-impl<T> Erc<T>
-where
-    T: EventTarget + ?Sized,
-{
-    pub fn weak(&self) -> Weak<T> {
-        Arc::downgrade(&self.arc)
-    }
-
-    pub fn event_loop(&self) -> impl EventLoopHandle {
-        self.arc.event_loop()
-    }
-
-    pub fn get(&self) -> &T {
-        &self.arc
-    }
-}
-
-impl<T> Clone for Erc<T>
-where
-    T: EventTarget + ?Sized,
-{
-    fn clone(&self) -> Self {
-        Self {
-            arc: self.arc.clone(),
-        }
-    }
-}
-
 #[macro_export]
 macro_rules! use_shard {
     ($name:path) => {
         fn default_shard() -> &'static impl ::eventful_rs::EventLoop {
             &$name
         }
-    };
-}
-
-#[macro_export]
-macro_rules! erc {
-    ($e:expr) => {
-        default_shard().bind($e)
     };
 }
