@@ -26,16 +26,12 @@ pub struct WebClient {
 #[asynchronize]
 impl WebClient {
     pub fn new() -> ShardRcHandle<Self> {
-        TOKIO_WEB.spawn(|sharded| {
-            let client = reqwest::Client::new();
-            let last_url = RefCell::new(None);
-            sharded(WebClient {
-                client,
-                last_url,
-                events: Default::default(),
-            })
-            .as_handle()
-        })
+        WebClient {
+            client: reqwest::Client::new(),
+            last_url: RefCell::new(None),
+            events: Default::default(),
+        }
+        .into()
     }
 
     #[action]

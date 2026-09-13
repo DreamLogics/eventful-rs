@@ -17,11 +17,11 @@ where
     where
         F: FnOnce(&T) + Send + 'static;
 
-    fn upgrade_in_shard_async<F, R>(&self, task: F)
+    fn upgrade_in_shard_async<F>(&self, task: F)
     where
         F: AsyncFnOnce(&T) -> () + Send + 'static;
 
-    async fn deferred_upgrade_in_shard<F, R>(&self, task: F)
+    async fn deferred_upgrade_in_shard<F, R>(&self, task: F) -> R
     where
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static;
@@ -139,7 +139,7 @@ where
         self.shard_handle.invoke_with_handle(self.clone(), task);
     }
 
-    fn upgrade_in_shard_async<F, R>(&self, task: F)
+    fn upgrade_in_shard_async<F>(&self, task: F)
     where
         F: AsyncFnOnce(&T) -> () + Send + 'static,
     {
@@ -147,12 +147,12 @@ where
             .invoke_with_handle_async(self.clone(), task);
     }
 
-    async fn deferred_upgrade_in_shard<F, R>(&self, task: F)
+    async fn deferred_upgrade_in_shard<F, R>(&self, task: F) -> R
     where
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.shard_handle.deferred_invoke(self.clone(), task).await;
+        self.shard_handle.deferred_invoke(self.clone(), task).await
     }
 
     fn downgrade(&self) -> ShardWeakHandle<T>
@@ -219,7 +219,7 @@ where
         self.shard_handle.invoke_with_handle(self.clone(), task);
     }
 
-    fn upgrade_in_shard_async<F, R>(&self, task: F)
+    fn upgrade_in_shard_async<F>(&self, task: F)
     where
         F: AsyncFnOnce(&T) -> () + Send + 'static,
     {
@@ -227,12 +227,12 @@ where
             .invoke_with_handle_async(self.clone(), task);
     }
 
-    async fn deferred_upgrade_in_shard<F, R>(&self, task: F)
+    async fn deferred_upgrade_in_shard<F, R>(&self, task: F) -> R
     where
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.shard_handle.deferred_invoke(self.clone(), task).await;
+        self.shard_handle.deferred_invoke(self.clone(), task).await
     }
 
     fn downgrade(&self) -> ShardWeakHandle<T>

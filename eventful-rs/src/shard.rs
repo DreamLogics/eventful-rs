@@ -15,8 +15,8 @@ use std::{
 
 use crate::shard_futures::poll_future;
 use crate::{
-    EventLoop, EventLoopHandle, EventTarget, Eventful, FutureId, HasEvents, LocalFuture, ShardId,
-    ShardRc, ShardRcStore, Task,
+    EventLoop, EventLoopHandle, Eventful, FutureId, HasEvents, LocalFuture, ShardId, ShardRc,
+    ShardRcStore, Task,
 };
 
 #[derive(Clone)]
@@ -105,6 +105,19 @@ impl EventLoopHandle for ShardEventHandle {
             rx.await
                 .expect("target event loop dropped deferred invocation")
         }
+    }
+
+    fn spawn<F>(&self, f: F)
+    where
+        F: Future + Send + 'static,
+    {
+        let _ = self
+            .sender
+            .send(Task::CallWithContextAsync(Box::new(move |_ctx| {
+                Box::pin(async move {
+                    f.await;
+                })
+            })));
     }
 }
 
@@ -213,7 +226,7 @@ impl EventLoop for Shard {
         self.handle.clone()
     }
 
-    fn spawn<F, R, T>(&self, f: F) -> R
+    fn bind<F, R, T>(&self, f: F) -> R
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,

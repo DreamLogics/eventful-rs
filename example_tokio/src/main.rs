@@ -1,7 +1,6 @@
 use eventful_rs::*;
 
 use crate::web::*;
-
 mod web;
 
 shard_local!(MAIN_SHARD);
@@ -16,13 +15,11 @@ impl App {
     fn new() -> ShardRcHandle<Self> {
         let web_client = web::WebClient::new();
         let wch = web_client.clone();
-        let app = MAIN_SHARD.spawn(move |sharded| {
-            sharded(Self {
-                web_client,
-                events: Default::default(),
-            })
-            .as_handle()
-        });
+        let app: ShardRcHandle<Self> = Self {
+            web_client,
+            events: Default::default(),
+        }
+        .into();
 
         wch.on_response().connect(&app);
 
@@ -35,6 +32,15 @@ impl App {
         self.web_client.fetch(url);
         // self.web_client.
     }
+
+    #[asynced]
+    async fn what_did_we_do(&self) {
+        if let Some(url) = self.web_client.last_url().await {
+            println!("Last fetched URL: {}", url);
+        } else {
+            println!("No URL fetched yet.");
+        }
+    }
 }
 
 impl WebClientEvents for App {
@@ -45,8 +51,11 @@ impl WebClientEvents for App {
 }
 
 fn main() {
-    let app = App::new();
-    app.run();
+    MAIN_SHARD.spawn(async {
+        let app = App::new();
+        app.run();
+        app.what_did_we_do().await;
+    });
 
     MAIN_SHARD.run_event_loop();
     TOKIO_WEB.join();

@@ -92,6 +92,9 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static;
 
+    fn spawn<F>(&self, f: F)
+    where
+        F: Future + Send + 'static;
     // fn invoke_and_then<F, C, R>(&self, task: F, callback: C)
     // where
     //     F: FnOnce() -> R + Send + 'static,
@@ -121,7 +124,7 @@ pub trait EventLoop {
     type HandleType: EventLoopHandle;
     fn handle(&self) -> Self::HandleType;
     /// Spawn objects bound to this event loop.
-    fn spawn<F, R, T>(&'static self, f: F) -> R
+    fn bind<F, R, T>(&'static self, f: F) -> R
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
@@ -129,11 +132,17 @@ pub trait EventLoop {
             + HasEvents<T::EventSetType>
             + Sized
             + 'static;
+    fn spawn<F>(&self, f: F)
+    where
+        F: Future + Send + 'static,
+    {
+        self.handle().spawn(f);
+    }
 }
 
-pub trait EventTarget: Send + Sync + 'static {
-    fn event_loop(&self) -> impl EventLoopHandle;
-}
+// pub trait EventTarget: Send + Sync + 'static {
+//     fn event_loop(&self) -> impl EventLoopHandle;
+// }
 
 type TaskFn<Args> = dyn Fn(Args) + Send + Sync + 'static;
 

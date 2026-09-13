@@ -65,8 +65,8 @@ mod bar {
 }
 
 fn main() {
-    let foo = FOO_SHARD.spawn(|sharded| sharded(Foo::new("Sera".to_owned())).as_handle());
-    let bar = BAR_SHARD.spawn(|sharded| sharded(bar::Bar::new()).as_handle());
+    let foo = FOO_SHARD.bind(|sharded| sharded(Foo::new("Sera".to_owned())).as_handle());
+    let bar = BAR_SHARD.bind(|sharded| sharded(bar::Bar::new()).as_handle());
 
     foo.on_hello().connect(&bar);
     foo.on_position().connect(&bar);

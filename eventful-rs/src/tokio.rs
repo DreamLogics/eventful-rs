@@ -11,8 +11,7 @@ use tokio::{
 };
 
 use crate::{
-    EventLoop, EventLoopHandle, EventTarget, Eventful, HasEvents, ShardId, ShardRc, ShardRcStore,
-    Task,
+    EventLoop, EventLoopHandle, Eventful, HasEvents, ShardId, ShardRc, ShardRcStore, Task,
 };
 
 #[derive(Clone)]
@@ -104,6 +103,15 @@ impl EventLoopHandle for TokioShardHandle {
             rx.await
                 .expect("target event loop dropped deferred invocation")
         }
+    }
+
+    fn spawn<F>(&self, f: F)
+    where
+        F: Future + Send + 'static,
+    {
+        self.tokio_rt.spawn(async move {
+            f.await;
+        });
     }
 }
 
@@ -235,7 +243,7 @@ impl EventLoop for TokioShard {
         }
     }
 
-    fn spawn<F, R, T>(&self, f: F) -> R
+    fn bind<F, R, T>(&self, f: F) -> R
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,

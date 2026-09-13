@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use futures::channel::oneshot;
 
 use crate::{
-    EventLoop, EventLoopHandle, EventTarget, Eventful, HasEvents, ShardId, ShardRc, ShardRcStore,
+    EventLoop, EventLoopHandle, Eventful, HasEvents, ShardId, ShardRc, ShardRcStore,
     guarded_refcell::GuardedRefCell,
 };
 
@@ -97,6 +97,16 @@ impl EventLoopHandle for SlintShardHandle {
                 .expect("target event loop dropped deferred invocation")
         }
     }
+
+    fn spawn<F>(&self, f: F)
+    where
+        F: Future + Send + 'static,
+    {
+        slint::invoke_from_event_loop(move || {
+            drop(slint::spawn_local(f));
+        })
+        .unwrap();
+    }
 }
 
 pub struct SlintShard {
@@ -137,7 +147,7 @@ impl EventLoop for SlintShard {
         self.handle.clone()
     }
 
-    fn spawn<F, R, T>(&'static self, f: F) -> R
+    fn bind<F, R, T>(&'static self, f: F) -> R
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,

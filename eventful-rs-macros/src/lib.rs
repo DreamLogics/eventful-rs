@@ -488,11 +488,17 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         #item
 
-        impl #impl_generics ::eventful_rs::EventTarget for #struct_name #type_generics #where_clause {
-            fn event_loop(&self) -> impl ::eventful_rs::EventLoopHandle {
-                default_shard().handle()
+        impl #impl_generics Into<::eventful_rs::ShardRcHandle<#struct_name #type_generics>> for #struct_name #type_generics {
+            fn into(self) -> ::eventful_rs::ShardRcHandle<#struct_name #type_generics> {
+                default_shard().bind(|sharded| sharded(self).as_handle())
             }
         }
+
+        // impl #impl_generics ::eventful_rs::EventTarget for #struct_name #type_generics #where_clause {
+        //     fn event_loop(&self) -> impl ::eventful_rs::EventLoopHandle {
+        //         default_shard().handle()
+        //     }
+        // }
 
         impl #impl_generics ::eventful_rs::HasEvents<#set_name>
             for #struct_name #type_generics
