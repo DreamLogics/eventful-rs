@@ -8,15 +8,21 @@ shard_local!(MAIN_SHARD);
 
 #[eventful]
 struct App {
-    web_client: Erc<web::WebClient>,
+    web_client: ShardRcHandle<web::WebClient>,
 }
 
 #[asynchronize]
 impl App {
-    fn new() -> Erc<Self> {
+    fn new() -> ShardRcHandle<Self> {
         let web_client = web::WebClient::new();
         let wch = web_client.clone();
-        let app = erc!(App { web_client });
+        let app = MAIN_SHARD.spawn(move |sharded| {
+            sharded(Self {
+                web_client,
+                events: Default::default(),
+            })
+            .as_handle()
+        });
 
         wch.on_response().connect(&app);
 

@@ -1,0 +1,43 @@
+// Project-local debug tasks
+//
+// For more documentation on how to configure debug tasks,
+// see: https://zed.dev/docs/debugger
+[
+  {
+    "adapter": "CodeLLDB",
+    "label": "cargo test -p eventful-rs --all-targets",
+    "build": {
+      "label": "cargo test -p eventful-rs --all-targets",
+      "command": "cargo",
+      "args": ["test", "--package", "eventful-rs", "--all-targets", "--no-run"],
+      "env": {
+        "RUSTC_TOOLCHAIN": "/home/sanne/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+      },
+      "cwd": "/home/sanne/Projects/eventful-rs",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "reveal_target": "dock",
+      "hide": "never",
+      "tags": [],
+      "shell": "system",
+      "show_summary": false,
+      "show_command": false,
+      "save": "none",
+      "hooks": [],
+    },
+    "sourceLanguages": ["rust"],
+  },
+  {
+    "label": "Build & Debug example",
+    "build": {
+      "command": "cargo",
+      "args": ["build", "--package", "eventful-rs-example"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/eventful-rs-example",
+    // sourceLanguages is required for CodeLLDB (not GDB) when using Rust
+    "sourceLanguages": ["rust"],
+    "request": "launch",
+    "adapter": "CodeLLDB",
+  },
+]

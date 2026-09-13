@@ -1,9 +1,13 @@
-pub use eventful_rs_macros::{action, asynchronize, eventful, events};
+pub use eventful_rs_macros::{action, asynced, asynchronize, eventful, events};
 
 mod shard_futures;
+// mod handle;
+// pub use handle::*;
+mod guarded_refcell;
 
-mod handle;
-pub use handle::*;
+mod shard_handle;
+use futures::future::BoxFuture;
+pub use shard_handle::*;
 
 pub mod local;
 
@@ -16,25 +20,78 @@ pub mod tokio;
 pub mod slint;
 
 use std::{
+    pin::Pin,
     rc::Rc,
     sync::{Arc, Mutex, Weak},
 };
 
 // type Task = Box<dyn FnOnce() + Send + 'static>;
+type FutureId = usize;
+type LocalFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
 
-enum Task {
+enum Task<T> {
     Call(Box<dyn FnOnce() + Send + 'static>),
+
+    CallAsync(Box<dyn FnOnce() -> LocalFuture<'static> + Send + 'static>),
+
+    CallWithContext(Box<dyn FnOnce(&T) + Send + 'static>),
+
+    CallWithContextAsync(Box<dyn for<'a> FnOnce(&'a T) -> LocalFuture<'a> + Send + 'static>),
+
+    Wake(FutureId),
+
     Stop,
 }
 
+static LAST_SHARD_ID: Mutex<usize> = Mutex::new(0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ShardId(pub usize);
+
+impl ShardId {
+    pub fn new() -> Self {
+        let mut last_id = LAST_SHARD_ID.lock().unwrap();
+        *last_id += 1;
+        ShardId(*last_id)
+    }
+}
+
+impl Default for ShardId {
+    fn default() -> Self {
+        ShardId::new()
+    }
+}
+
 pub trait EventLoopHandle: Clone + Send + Sync + 'static {
+    fn shard_id(&self) -> ShardId;
     fn invoke<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static;
-    fn invoke_async<F, R>(&self, f: F)
+    fn invoke_async<F>(&self, f: F)
     where
-        F: FnOnce() -> R + Send + 'static,
-        R: std::future::Future<Output = ()> + Send + 'static;
+        F: AsyncFnOnce() -> () + Send + 'static;
+    fn invoke_with_handle<T, H, F>(&self, handle: H, f: F)
+    where
+        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + Sized + 'static,
+        H: ShardHandle<T>,
+        F: FnOnce(&T) + Send + 'static;
+    fn invoke_with_handle_async<T, H, F>(&self, handle: H, f: F)
+    where
+        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + Sized + 'static,
+        H: ShardHandle<T>,
+        F: AsyncFnOnce(&T) -> () + Send + 'static;
+
+    fn deferred_invoke<T, H, F, R>(
+        &self,
+        handle: H,
+        task: F,
+    ) -> impl Future<Output = R> + Send + 'static
+    where
+        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + Sized + 'static,
+        H: ShardHandle<T>,
+        F: AsyncFnOnce(&T) -> R + Send + 'static,
+        R: Send + 'static;
+
     // fn invoke_and_then<F, C, R>(&self, task: F, callback: C)
     // where
     //     F: FnOnce() -> R + Send + 'static,
@@ -49,8 +106,7 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
 }
 
 pub trait Eventful {
-    type EventSetType: ?Sized + Send + 'static;
-    type EventsTraitType: ?Sized + Send + 'static;
+    type EventSetType: ?Sized + Send + Sync + 'static;
     type EventLoopHandleType: EventLoopHandle;
 }
 
@@ -61,19 +117,20 @@ where
     fn events(&self) -> &Arc<E>;
 }
 
-// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// pub struct PostError;
-
 pub trait EventLoop {
     type HandleType: EventLoopHandle;
-
     fn handle(&self) -> Self::HandleType;
-    // fn bind<T>(&self, t: T) -> Erc<T>
-    // where
-    //     T: EventTarget;
+    /// Spawn objects bound to this event loop.
+    fn spawn<F, R, T>(&'static self, f: F) -> R
+    where
+        F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
+        R: Send + 'static,
+        T: Eventful<EventLoopHandleType = Self::HandleType>
+            + HasEvents<T::EventSetType>
+            + Sized
+            + 'static;
 }
 
-/// Implemented by `#[eventful(...)]` to declare object affinity.
 pub trait EventTarget: Send + Sync + 'static {
     fn event_loop(&self) -> impl EventLoopHandle;
 }
@@ -123,12 +180,5 @@ macro_rules! use_shard {
         fn default_shard() -> &'static impl ::eventful_rs::EventLoop {
             &$name
         }
-    };
-}
-
-#[macro_export]
-macro_rules! sharded {
-    ($e:expr) => {
-        ::eventful_rs::ShardRc::new($e, default_shard().handle())
     };
 }

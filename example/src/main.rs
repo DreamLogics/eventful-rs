@@ -3,12 +3,14 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use eventful_rs::events;
-use eventful_rs::{EventLoop, EventLoopHandle, eventful, shard_std};
+use eventful_rs::{EventLoop, EventLoopHandle, ShardHandle, eventful, shard_std};
+use eventful_rs::{ShardRc, events};
+
+use crate::bar::BAR_SHARD;
 
 shard_std!(FOO_SHARD);
 
-mod expanded;
+// mod expanded;
 
 #[events]
 trait FooEvents {
@@ -36,7 +38,6 @@ impl Foo {
 }
 
 mod bar {
-    use eventful_rs::{ShardRc, shard::ShardEventHandle, sharded};
 
     use super::*;
     shard_std!(BAR_SHARD);
@@ -45,10 +46,10 @@ mod bar {
     pub struct Bar;
 
     impl Bar {
-        pub fn new() -> ShardRc<Self> {
-            sharded!(Bar {
+        pub fn new() -> Self {
+            Bar {
                 events: Default::default(),
-            })
+            }
         }
     }
 
@@ -64,19 +65,19 @@ mod bar {
 }
 
 fn main() {
-    let foo = Rc::new(Foo::new("Sera".to_owned()));
-    let bar = bar::Bar::new();
+    let foo = FOO_SHARD.spawn(|sharded| sharded(Foo::new("Sera".to_owned())).as_handle());
+    let bar = BAR_SHARD.spawn(|sharded| sharded(bar::Bar::new()).as_handle());
 
     foo.on_hello().connect(&bar);
     foo.on_position().connect(&bar);
 
-    let emitter = foo.clone();
-    FOO_SHARD.handle().invoke(move || {
+    foo.upgrade_in_shard(|foo| {
         for _ in 0..3 {
-            emitter.get().say_hello();
+            foo.say_hello();
             thread::sleep(Duration::from_millis(100));
         }
     });
 
+    FOO_SHARD.join();
     bar::BAR_SHARD.join();
 }
