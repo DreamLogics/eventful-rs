@@ -12,13 +12,14 @@ use tokio::{
 
 use crate::{
     EventLoop, EventLoopHandle, Eventful, HasEvents, ShardId, ShardRc, ShardRcStore, Task,
+    guarded_refcell::GuardedRefCell,
 };
 
 #[derive(Clone)]
 pub struct TokioShardHandle {
     tokio_rt: Handle,
     shard_id: ShardId,
-    tx: tokio::sync::mpsc::Sender<Task<ShardCtxHandle>>,
+    tx: tokio::sync::mpsc::Sender<Task<TokioShardCtx>>,
 }
 
 impl EventLoopHandle for TokioShardHandle {
@@ -53,7 +54,7 @@ impl EventLoopHandle for TokioShardHandle {
             .tx
             .blocking_send(Task::CallWithContext(Box::new(move |ctx| {
                 let id = handle.id();
-                if let Some(obj) = ctx.get_ctx().object_store.borrow().get(id) {
+                if let Some(obj) = ctx.object_store.borrow().get(id) {
                     f(&obj);
                 }
             })));
@@ -69,7 +70,7 @@ impl EventLoopHandle for TokioShardHandle {
             .tx
             .blocking_send(Task::CallWithContextAsync(Box::new(move |ctx| {
                 let id = handle.id();
-                if let Some(obj) = ctx.get_ctx().object_store.borrow().get::<T>(id) {
+                if let Some(obj) = ctx.object_store.borrow().get::<T>(id) {
                     let obj = obj.clone();
                     Box::pin(async move {
                         let obj = obj;
@@ -116,83 +117,70 @@ impl EventLoopHandle for TokioShardHandle {
 }
 
 pub struct TokioShard {
+    name: String,
     rt: Arc<Mutex<Option<Handle>>>,
     pub shard_id: ShardId,
     thread_id: std::thread::ThreadId,
     join_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
-    tx: tokio::sync::mpsc::Sender<Task<ShardCtxHandle>>,
-    ctx: Arc<Mutex<Option<ShardCtxHandle>>>,
+    tx: tokio::sync::mpsc::Sender<Task<TokioShardCtx>>,
+    ctx: Arc<TokioShardCtx>,
 }
-
-struct ShardCtxHandle(*const TokioShardCtx);
-impl ShardCtxHandle {
-    fn get_ctx(&self) -> &TokioShardCtx {
-        assert!(
-            std::thread::current().id() == std::thread::current().id(),
-            "ShardCtxHandle can only be accessed from the shard's thread"
-        );
-        unsafe { &*self.0 }
-    }
-}
-impl Clone for ShardCtxHandle {
-    fn clone(&self) -> Self {
-        ShardCtxHandle(self.0)
-    }
-}
-unsafe impl Send for ShardCtxHandle {}
 
 struct TokioShardCtx {
-    object_store: RefCell<ShardRcStore>,
+    object_store: GuardedRefCell<ShardRcStore>,
 }
 
 impl TokioShard {
-    pub fn new() -> Self {
+    pub fn new(name: &str) -> Self {
         let shard_id = ShardId::new();
-        let (tx, rx) = tokio::sync::mpsc::channel::<Task<ShardCtxHandle>>(Semaphore::MAX_PERMITS);
+        let (tx, rx) = tokio::sync::mpsc::channel::<Task<TokioShardCtx>>(Semaphore::MAX_PERMITS);
         let rt_handle: Arc<Mutex<Option<Handle>>> = Arc::new(Mutex::new(None));
         let rt_handle_clone = Arc::clone(&rt_handle);
-        let ctx_handle: Arc<Mutex<Option<ShardCtxHandle>>> = Arc::new(Mutex::new(None));
+        let ctx_handle: Arc<TokioShardCtx> = Arc::new(TokioShardCtx {
+            object_store: GuardedRefCell::new(ShardRcStore::new()),
+        });
         let ctx_handle_clone = ctx_handle.clone();
         let join_handle = std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
-            rt_handle_clone.lock().unwrap().replace(rt.handle().clone());
+            {
+                rt_handle_clone.lock().unwrap().replace(rt.handle().clone());
+            }
             rt.block_on(async {
                 let mut rx = rx;
-                let ctx = TokioShardCtx {
-                    object_store: RefCell::new(ShardRcStore::new()),
-                };
-                ctx_handle_clone
-                    .lock()
-                    .unwrap()
-                    .replace(ShardCtxHandle(&ctx as *const TokioShardCtx));
-                let ctx_handle = ShardCtxHandle(&ctx as *const TokioShardCtx);
+                let ctx = ctx_handle_clone;
+
                 while let Some(task) = rx.recv().await {
                     match task {
                         Task::Call(f) => {
                             let _ = catch_unwind(AssertUnwindSafe(f));
                         }
                         Task::CallWithContext(f) => {
-                            let _ = catch_unwind(AssertUnwindSafe(|| f(&ctx_handle)));
+                            let _ = catch_unwind(AssertUnwindSafe(|| f(&ctx)));
                         }
                         Task::CallAsync(f) => {
                             f().await;
                         }
                         Task::CallWithContextAsync(f) => {
-                            f(&ctx_handle).await;
+                            f(&ctx).await;
                         }
                         Task::Wake(_) => {}
                         Task::Stop => break,
                     }
                 }
-                *ctx_handle_clone.lock().unwrap() = None;
             });
         });
         let thread_id = join_handle.thread().id();
 
+        // wait for the runtime to be initialized
+        while rt_handle.lock().unwrap().is_none() {
+            std::thread::yield_now();
+        }
+
         Self {
+            name: name.to_string(),
             rt: rt_handle,
             thread_id,
             shard_id,
@@ -210,25 +198,6 @@ impl TokioShard {
         let rt_handle = self.rt.lock().unwrap();
         let handle = rt_handle.as_ref().expect("Runtime handle not initialized");
         handle.block_on(async move { main_fn().await })
-    }
-
-    pub fn join(&self) {
-        assert!(
-            std::thread::current().id() != self.thread_id,
-            "Cannot join the shard from its own thread"
-        );
-        if let Some(join_handle) = self.join_handle.lock().unwrap().take() {
-            self.tx
-                .blocking_send(Task::Stop)
-                .expect("Failed to send stop task");
-            let _ = join_handle.join();
-        }
-    }
-}
-
-impl Default for TokioShard {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -261,7 +230,7 @@ impl EventLoop for TokioShard {
                     let sharded = move |t: T| {
                         //println!("sharded called on {:?}", std::thread::current().id());
                         let rc = Rc::new(t);
-                        let id = ctx.get_ctx().object_store.borrow_mut().insert(rc.clone());
+                        let id = ctx.object_store.borrow_mut().insert(rc.clone());
                         ShardRc::new(id, rc, handle.clone())
                     };
                     let result = f(&sharded);
@@ -269,11 +238,7 @@ impl EventLoop for TokioShard {
                 })));
             rx.recv().expect("failed to receive result from event loop")
         } else {
-            let ctx = self.ctx.lock().unwrap();
-            let ctx = ctx
-                .as_ref()
-                .expect("Shard context not initialized")
-                .get_ctx();
+            let ctx = self.ctx.clone();
             let sharded = move |t: T| {
                 //println!("sharded called on {:?}", std::thread::current().id());
                 let rc = Rc::new(t);
@@ -282,6 +247,28 @@ impl EventLoop for TokioShard {
             };
             f(&sharded)
         }
+    }
+
+    fn join(&self) -> Result<(), crate::ShardError> {
+        assert!(
+            std::thread::current().id() != self.thread_id,
+            "Cannot join the shard from its own thread"
+        );
+        if let Some(join_handle) = self.join_handle.lock().unwrap().take() {
+            self.tx.blocking_send(Task::Stop).map_err(|e| {
+                crate::ShardError::JoinError(
+                    format!("Failed to send stop task on tokio shard {}", &self.name),
+                    Some(Box::new(e)),
+                )
+            })?;
+            join_handle.join().map_err(|_| {
+                crate::ShardError::JoinError(
+                    format!("Failed to join tokio shard {}", &self.name),
+                    None,
+                )
+            })?;
+        }
+        Ok(())
     }
 
     // fn bind<T>(&self, t: T) -> Erc<T>
@@ -296,7 +283,7 @@ impl EventLoop for TokioShard {
 macro_rules! shard_tokio {
     ($name:ident) => {
         pub static $name: ::std::sync::LazyLock<::eventful_rs::tokio::TokioShard> =
-            ::std::sync::LazyLock::new(|| ::eventful_rs::tokio::TokioShard::new());
+            ::std::sync::LazyLock::new(|| ::eventful_rs::tokio::TokioShard::new(stringify!($name)));
         use ::eventful_rs::tokio::TokioShard as DefaultShardType;
         use ::eventful_rs::tokio::TokioShardHandle as DefaultShardHandleType;
         fn default_shard() -> &'static ::eventful_rs::tokio::TokioShard {

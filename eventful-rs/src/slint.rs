@@ -180,6 +180,11 @@ impl EventLoop for SlintShard {
         }
     }
 
+    fn join(&self) -> Result<(), crate::ShardError> {
+        // No-op for SlintShard, as it runs in the main thread and cannot be joined.
+        Ok(())
+    }
+
     // fn bind<T>(&self, t: T) -> Erc<T>
     // where
     //     T: EventTarget,

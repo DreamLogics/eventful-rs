@@ -1,12 +1,10 @@
 pub use eventful_rs_macros::{action, asynced, asynchronize, eventful, events};
 
 mod shard_futures;
-// mod handle;
-// pub use handle::*;
+
 mod guarded_refcell;
 
 mod shard_handle;
-use futures::future::BoxFuture;
 pub use shard_handle::*;
 
 pub mod local;
@@ -21,9 +19,79 @@ pub mod slint;
 
 use std::{
     pin::Pin,
-    rc::Rc,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Mutex},
 };
+
+// struct ShardRegistryEntry {
+//     shard_id: ShardId,
+//     event_loop: &'static dyn EventLoopInternal,
+// }
+
+// unsafe impl Sync for ShardRegistryEntry {}
+// unsafe impl Send for ShardRegistryEntry {}
+
+// static SHARD_REGISTRY: ::std::sync::LazyLock<Mutex<Vec<ShardRegistryEntry>>> =
+//     ::std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+
+// pub fn join_all_shards() -> Result<(), ShardError> {
+//     let registry = SHARD_REGISTRY.lock().unwrap();
+//     for entry in registry.iter() {
+//         entry.event_loop.join()?;
+//     }
+//     Ok(())
+// }
+
+// pub fn register_shard(shard_id: ShardId, event_loop: &'static dyn EventLoopInternal) {
+//     let mut registry = SHARD_REGISTRY.lock().unwrap();
+//     registry.push(ShardRegistryEntry {
+//         shard_id,
+//         event_loop,
+//     });
+// }
+
+#[derive(Debug)]
+pub enum ShardError {
+    JoinError(String, Option<Box<dyn std::error::Error + 'static>>),
+    PostError(String, Option<Box<dyn std::error::Error + 'static>>),
+}
+
+impl std::fmt::Display for ShardError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShardError::JoinError(msg, original_err) => {
+                write!(f, "join error: {msg}")?;
+
+                if let Some(err) = original_err {
+                    write!(f, ": {err}")?;
+                }
+
+                Ok(())
+            }
+
+            ShardError::PostError(msg, original_err) => {
+                write!(f, "post error: {msg}")?;
+
+                if let Some(err) = original_err {
+                    write!(f, ": {err}")?;
+                }
+
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for ShardError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ShardError::JoinError(_, Some(err)) | ShardError::PostError(_, Some(err)) => {
+                Some(err.as_ref())
+            }
+
+            _ => None,
+        }
+    }
+}
 
 // type Task = Box<dyn FnOnce() + Send + 'static>;
 type FutureId = usize;
@@ -120,6 +188,10 @@ where
     fn events(&self) -> &Arc<E>;
 }
 
+// trait EventLoopInternal {
+//     fn join(&self) -> Result<(), ShardError>;
+// }
+
 pub trait EventLoop {
     type HandleType: EventLoopHandle;
     fn handle(&self) -> Self::HandleType;
@@ -138,6 +210,7 @@ pub trait EventLoop {
     {
         self.handle().spawn(f);
     }
+    fn join(&self) -> Result<(), ShardError>;
 }
 
 // pub trait EventTarget: Send + Sync + 'static {

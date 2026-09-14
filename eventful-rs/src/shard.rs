@@ -13,6 +13,7 @@ use std::{
     thread,
 };
 
+use crate::guarded_refcell::GuardedRefCell;
 use crate::shard_futures::poll_future;
 use crate::{
     EventLoop, EventLoopHandle, Eventful, FutureId, HasEvents, LocalFuture, ShardId, ShardRc,
@@ -124,15 +125,16 @@ impl EventLoopHandle for ShardEventHandle {
 struct ShardCtxHandle(*const ShardCtx);
 
 pub struct Shard {
+    name: String,
     handle: ShardEventHandle,
     join_handle: Mutex<Option<thread::JoinHandle<()>>>,
     pub shard_id: ShardId,
     thread_id: thread::ThreadId,
-    ctx: Arc<Mutex<Option<ShardCtxHandle>>>,
+    ctx: Arc<ShardCtx>,
 }
 
 struct ShardCtx {
-    object_store: RefCell<ShardRcStore>,
+    object_store: GuardedRefCell<ShardRcStore>,
 }
 
 unsafe impl Send for ShardCtxHandle {}
@@ -141,17 +143,16 @@ impl Shard {
     pub fn new(thread_name: &str) -> Self {
         let (sender, receiver) = mpsc::channel::<Task<ShardCtx>>();
         let shard_id = ShardId::new();
-        let ctx_handle: Arc<Mutex<Option<ShardCtxHandle>>> = Arc::new(Mutex::new(None));
+        let ctx_handle: Arc<ShardCtx> = Arc::new(ShardCtx {
+            object_store: GuardedRefCell::new(ShardRcStore::new()),
+        });
         let ctx_handle_clone = ctx_handle.clone();
         let sender_clone = sender.clone();
         let join_handle = thread::Builder::new()
             .name(thread_name.into())
             .spawn(move || {
                 let sender = sender_clone;
-                let ctx = ShardCtx {
-                    object_store: RefCell::new(ShardRcStore::new()),
-                };
-                *ctx_handle_clone.lock().unwrap() = Some(ShardCtxHandle(&ctx as *const ShardCtx));
+                let ctx = ctx_handle_clone;
                 let mut futures: HashMap<FutureId, LocalFuture<'_>> = HashMap::new();
 
                 let mut next_future_id: FutureId = 0;
@@ -193,12 +194,12 @@ impl Shard {
                     ctx.object_store.borrow_mut().garbage_collect();
                 }
                 drop(futures);
-                *ctx_handle_clone.lock().unwrap() = None;
             })
             .expect("failed to spawn event-loop thread");
         let thread_id = join_handle.thread().id();
 
         Self {
+            name: thread_name.into(),
             handle: ShardEventHandle {
                 sender,
                 shard_id,
@@ -208,13 +209,6 @@ impl Shard {
             shard_id,
             thread_id,
             ctx: ctx_handle,
-        }
-    }
-
-    pub fn join(&self) {
-        if let Some(join_handle) = self.join_handle.lock().unwrap().take() {
-            let _ = self.handle.sender.send(Task::Stop);
-            let _ = join_handle.join();
         }
     }
 }
@@ -253,14 +247,7 @@ impl EventLoop for Shard {
                 })));
             rx.recv().expect("failed to receive result from event loop")
         } else {
-            let ctx = self
-                .ctx
-                .lock()
-                .unwrap()
-                .as_ref()
-                .expect("Shard context is not initialized")
-                .0;
-            let ctx = unsafe { &*ctx };
+            let ctx = self.ctx.clone();
             let sharded = move |t: T| {
                 //println!("sharded called on {:?}", std::thread::current().id());
                 let rc = Rc::new(t);
@@ -269,6 +256,25 @@ impl EventLoop for Shard {
             };
             f(&sharded)
         }
+    }
+
+    fn join(&self) -> Result<(), crate::ShardError> {
+        assert!(
+            std::thread::current().id() != self.thread_id,
+            "Cannot join the shard from its own thread"
+        );
+        if let Some(join_handle) = self.join_handle.lock().unwrap().take() {
+            self.handle.sender.send(Task::Stop).map_err(|e| {
+                crate::ShardError::PostError(
+                    format!("failed to send stop task on shard {}", &self.name),
+                    Some(Box::new(e)),
+                )
+            })?;
+            join_handle.join().map_err(|_| {
+                crate::ShardError::JoinError(format!("failed to join shard {}", &self.name), None)
+            })?;
+        }
+        Ok(())
     }
 
     // fn bind<T>(&self, t: T) -> Erc<T>

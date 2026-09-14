@@ -13,8 +13,8 @@ use futures::channel::oneshot;
 use crate::guarded_refcell::GuardedRefCell;
 use crate::shard_futures::poll_future;
 use crate::{
-    EventLoop, EventLoopHandle, Eventful, FutureId, HasEvents, LocalFuture, ShardId, ShardRc,
-    ShardRcStore, Task,
+    EventLoop, EventLoopHandle, Eventful, FutureId, HasEvents, LocalFuture, ShardError, ShardId,
+    ShardRc, ShardRcStore, Task,
 };
 
 #[derive(Clone)]
@@ -238,6 +238,11 @@ impl EventLoop for LocalShard {
             };
             f(&sharded)
         }
+    }
+
+    fn join(&self) -> Result<(), ShardError> {
+        // local thread, so nothing to join
+        Ok(())
     }
 
     // fn bind<T>(&self, t: T) -> Erc<T>
