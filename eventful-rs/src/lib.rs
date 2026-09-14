@@ -14,6 +14,9 @@ pub mod shard;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
+#[cfg(feature = "tokio")]
+pub mod tokio_local;
+
 #[cfg(feature = "slint")]
 pub mod slint;
 
@@ -22,32 +25,47 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-// struct ShardRegistryEntry {
-//     shard_id: ShardId,
-//     event_loop: &'static dyn EventLoopInternal,
-// }
+struct ShardRegistryEntry {
+    shard_id: ShardId,
+    join_handle: Box<dyn FnOnce() -> Result<(), ShardError> + Send + 'static>,
+}
 
-// unsafe impl Sync for ShardRegistryEntry {}
-// unsafe impl Send for ShardRegistryEntry {}
+static SHARD_REGISTRY: ::std::sync::LazyLock<Mutex<Vec<ShardRegistryEntry>>> =
+    ::std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
 
-// static SHARD_REGISTRY: ::std::sync::LazyLock<Mutex<Vec<ShardRegistryEntry>>> =
-//     ::std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+pub fn join_all_shards() -> Result<(), ShardError> {
+    let mut registry = SHARD_REGISTRY.lock().unwrap();
+    let mut errors = Vec::new();
 
-// pub fn join_all_shards() -> Result<(), ShardError> {
-//     let registry = SHARD_REGISTRY.lock().unwrap();
-//     for entry in registry.iter() {
-//         entry.event_loop.join()?;
-//     }
-//     Ok(())
-// }
+    for entry in registry.drain(..) {
+        if let Err(err) = (entry.join_handle)() {
+            errors.push(err);
+        }
+    }
 
-// pub fn register_shard(shard_id: ShardId, event_loop: &'static dyn EventLoopInternal) {
-//     let mut registry = SHARD_REGISTRY.lock().unwrap();
-//     registry.push(ShardRegistryEntry {
-//         shard_id,
-//         event_loop,
-//     });
-// }
+    if !errors.is_empty() {
+        // Combine all errors into a single error message
+        let combined_message = errors
+            .into_iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(ShardError::JoinError(combined_message, None));
+    }
+
+    Ok(())
+}
+
+fn register_shard(
+    shard_id: ShardId,
+    join_handle: Box<dyn FnOnce() -> Result<(), ShardError> + Send + 'static>,
+) {
+    let mut registry = SHARD_REGISTRY.lock().unwrap();
+    registry.push(ShardRegistryEntry {
+        shard_id,
+        join_handle,
+    });
+}
 
 #[derive(Debug)]
 pub enum ShardError {

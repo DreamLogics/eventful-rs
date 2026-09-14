@@ -3,7 +3,7 @@ use eventful_rs::*;
 use crate::web::*;
 mod web;
 
-shard_local!(MAIN_SHARD);
+shard_main!(MAIN_SHARD);
 
 #[eventful]
 struct App {

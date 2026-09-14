@@ -1,10 +1,9 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use std::rc::Rc;
 use std::{
-    sync::{Arc, Mutex, mpsc},
+    sync::{Mutex, mpsc},
     thread,
 };
 
@@ -254,7 +253,7 @@ impl EventLoop for LocalShard {
 }
 
 #[macro_export]
-macro_rules! shard_local {
+macro_rules! shard_main {
     ($name:ident) => {
         pub static $name: ::std::sync::LazyLock<::eventful_rs::local::LocalShard> =
             ::std::sync::LazyLock::new(|| ::eventful_rs::local::LocalShard::new());
