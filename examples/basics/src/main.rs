@@ -1,10 +1,7 @@
-use std::rc::Rc;
-use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
-use eventful_rs::{EventLoop, EventLoopHandle, ShardHandle, eventful, shard_std};
-use eventful_rs::{ShardRc, events};
+use eventful_rs::events;
+use eventful_rs::{EventLoop, ShardHandle, eventful, shard_std};
 
 use crate::bar::BAR_SHARD;
 
@@ -32,7 +29,7 @@ impl Foo {
     }
 
     fn say_hello(&self) {
-        self.emit_on_hello(format!("Hello, world! {}", &self.name));
+        self.emit_on_hello(format!("Hello, world! {}", self.name));
         self.emit_on_position(12.0, 34.0);
     }
 }
@@ -65,19 +62,18 @@ mod bar {
 }
 
 fn main() {
-    let foo = FOO_SHARD.bind(|sharded| sharded(Foo::new("Sera".to_owned())).as_handle());
+    let source = FOO_SHARD.bind(|sharded| sharded(Foo::new("Sera".to_owned())).as_handle());
     let bar = BAR_SHARD.bind(|sharded| sharded(bar::Bar::new()).as_handle());
 
-    foo.on_hello().connect(&bar);
-    foo.on_position().connect(&bar);
+    source.on_hello().connect(&bar);
+    source.on_position().connect(&bar);
 
-    foo.upgrade_in_shard(|foo| {
+    source.upgrade_in_shard(|source| {
         for _ in 0..3 {
-            foo.say_hello();
-            thread::sleep(Duration::from_millis(100));
+            source.say_hello();
         }
     });
 
-    FOO_SHARD.join();
-    bar::BAR_SHARD.join();
+    FOO_SHARD.join().unwrap();
+    bar::BAR_SHARD.join().unwrap();
 }

@@ -1,0 +1,20 @@
+error[E0277]: `Rc<Value>` cannot be sent between threads safely
+ --> tests/ui/non_send_handle_result.rs:6:25
+  |
+6 |     let _local = WORKER.bind(|bind| bind(Value { events: Default::default() }));
+  |                         ^^^^ `Rc<Value>` cannot be sent between threads safely
+  |
+  = help: within `ShardRc<Value>`, the trait `Send` is not implemented for `Rc<Value>`
+note: required because it appears within the type `ShardRc<Value>`
+ --> src/shard_handle.rs
+  |
+  | pub struct ShardRc<T>
+  |            ^^^^^^^
+note: required by a bound in `bind`
+ --> src/lib.rs
+  |
+  |     fn bind<F, R, T>(&self, f: F) -> R
+  |        ---- required by a bound in this associated function
+...
+  |         R: Send + 'static,
+  |            ^^^^ required by this bound in `EventLoop::bind`

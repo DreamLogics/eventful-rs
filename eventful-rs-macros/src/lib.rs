@@ -1,40 +1,46 @@
+#![forbid(unsafe_code)]
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
     FnArg, ItemImpl, ItemStruct, ItemTrait, Pat, TraitItem, Type, parse_macro_input, parse_quote,
 };
 
-fn snake(name: &str) -> String {
-    let mut out = String::new();
-    for (i, ch) in name.chars().enumerate() {
-        if ch.is_uppercase() {
-            if i != 0 {
-                out.push('_');
-            }
-            out.extend(ch.to_lowercase());
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
-
 #[proc_macro_attribute]
 pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut trait_item = parse_macro_input!(item as ItemTrait);
+    let trait_item = parse_macro_input!(item as ItemTrait);
+    if !trait_item.generics.params.is_empty() {
+        return syn::Error::new_spanned(
+            &trait_item.generics,
+            "generic event traits are not supported",
+        )
+        .to_compile_error()
+        .into();
+    }
+    for item in &trait_item.items {
+        let TraitItem::Fn(method) = item else {
+            return syn::Error::new_spanned(item, "event traits may only contain methods")
+                .to_compile_error()
+                .into();
+        };
+        let sig = &method.sig;
+        if sig.asyncness.is_some()
+            || !sig.generics.params.is_empty()
+            || !matches!(sig.receiver(), Some(r) if r.reference.is_some() && r.mutability.is_none())
+            || !matches!(&sig.output, syn::ReturnType::Default)
+        {
+            return syn::Error::new_spanned(
+                sig,
+                "events require a non-generic synchronous &self method with no return type",
+            )
+            .to_compile_error()
+            .into();
+        }
+    }
     let trait_name = &trait_item.ident;
     let set_name = format_ident!("{}EventSet", trait_name);
-    //let has_name = format_ident!("Has{}Events", trait_name);
     let ext_signals_name = format_ident!("{}SignalsExt", trait_name);
     let ext_emitter_name = format_ident!("{}EmittersExt", trait_name);
-    //let set_field = format_ident!("{}", snake(&trait_name.to_string()));
-
-    // set our supertraits to: `Send + Sync + 'static`
-
-    trait_item.supertraits.clear();
-    trait_item.supertraits.push(syn::parse_quote!(Send));
-    trait_item.supertraits.push(syn::parse_quote!(Sync));
-    trait_item.supertraits.push(syn::parse_quote!('static));
 
     let methods = trait_item
         .items
@@ -86,6 +92,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut extension_emitter_methods = Vec::new();
 
     for (method_name, signal_name, emit_name, arg_names, arg_types) in &methods {
+        let target_ident = fresh_target(arg_names);
         signal_defs.push(quote! {
             pub struct #signal_name {
                 inner: ::eventful_rs::Event<(#(#arg_types,)*)>,
@@ -108,14 +115,10 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     S: ::eventful_rs::Sharded<T>,
                     #(#arg_types: Clone + Send + 'static,)*
                 {
-                    // let weak = target.weak();
-                    // let event_loop = target.event_loop();
-                    let handle = target.as_handle().downgrade();
+                    let handle = ::eventful_rs::ShardHandle::downgrade(&::eventful_rs::Sharded::as_handle(target));
                     self.inner.add_connection(move |(#(#arg_names,)*)| {
-                        // let weak = weak.clone();
-                        // let event_loop = event_loop.clone();
-                        let _ = handle.upgrade_in_shard(move |target| {
-                            target.#method_name(#(#arg_names),*);
+                        ::eventful_rs::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
+                            #target_ident.#method_name(#(#arg_names),*);
                         });
                     });
                 }
@@ -158,7 +161,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
             #(#extension_signal_methods)*
         }
 
-        trait #ext_emitter_name: ::eventful_rs::HasEvents<#set_name>{
+        pub trait #ext_emitter_name: ::eventful_rs::HasEvents<#set_name>{
             #(#extension_emitter_methods)*
         }
 
@@ -187,7 +190,12 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item = parse_macro_input!(item as ItemImpl);
+    let mut item = parse_macro_input!(item as ItemImpl);
+    if item.trait_.is_some() || !item.generics.params.is_empty() {
+        return syn::Error::new_spanned(&item, "asynchronize requires a non-generic inherent impl")
+            .to_compile_error()
+            .into();
+    }
     let struct_type = &item.self_ty;
     let struct_name = if let Type::Path(type_path) = &**struct_type {
         type_path.path.segments.last().unwrap().ident.clone()
@@ -197,16 +205,7 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
             .into();
     };
     let trait_name = format_ident!("{}Async", struct_name);
-    // let mut generics = item.generics.clone();
 
-    // generics
-    //     .params
-    //     .push(syn::parse_quote!(__H: EventLoopHandle));
-    // generics
-    //     .params
-    //     .push(syn::parse_quote!(__S: ?Sized + Send + 'static));
-
-    // let (impl_generics, _, where_clause) = generics.split_for_impl();
     let (impl_generics, type_generics, where_clause) = item.generics.split_for_impl();
 
     let mut action_method_signature = Vec::new();
@@ -217,15 +216,33 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     for method in item.items.iter() {
         if let syn::ImplItem::Fn(method) = method {
+            let annotated = method.attrs.iter().any(|a| {
+                a.path()
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "action" || s.ident == "asynced")
+            });
+            if annotated
+                && (!matches!(method.sig.receiver(), Some(r) if r.reference.is_some() && r.mutability.is_none())
+                    || method.sig.unsafety.is_some()
+                    || method.sig.constness.is_some())
+            {
+                return syn::Error::new_spanned(
+                    &method.sig,
+                    "dispatched methods require a safe, non-const &self receiver",
+                )
+                .to_compile_error()
+                .into();
+            }
             for attr in &method.attrs {
-                if attr.path().is_ident("action") {
-                    // generate a signature for the method in the trait
-                    // this signature is stripped of the `#[action]` attribute and the method body
-                    // as well as the `async` keyword, if present
-
+                if attr
+                    .path()
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "action")
+                {
                     let sig = &method.sig;
 
-                    // error if sig has a return type that is not `-> ()`
                     if let syn::ReturnType::Type(_, ty) = &sig.output {
                         if let Type::Tuple(tuple) = &**ty {
                             if !tuple.elems.is_empty() {
@@ -248,7 +265,6 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
                     let method_name = &sig.ident;
                     let mut method_arg_names = Vec::new();
-                    // let mut method_generic_arg_names = Vec::new();
 
                     for input in &sig.inputs {
                         match input {
@@ -267,45 +283,40 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         }
                     }
 
-                    // for generic in &sig.generics.params {
-                    //     if let syn::GenericParam::Type(type_param) = generic {
-                    //         method_generic_arg_names.push(type_param.ident.clone());
-                    //     }
-                    // }
-
+                    let target_ident = fresh_target(&method_arg_names);
                     let is_async = sig.asyncness.is_some();
                     let mut trait_sig = sig.clone();
                     trait_sig.asyncness = None;
                     action_method_signature.push(trait_sig.clone());
 
-                    // generate an implementation for the method in the impl block
                     let method_impl = if is_async {
                         quote! {
                             #trait_sig {
-                                self.upgrade_in_shard_async(async |target| {
-                                    target.#method_name(#(#method_arg_names,)*).await;
+                                ::eventful_rs::ShardHandle::upgrade_in_shard_async(self, async move |#target_ident| {
+                                    #target_ident.#method_name(#(#method_arg_names,)*).await;
                                 });
                             }
                         }
                     } else {
                         quote! {
                             #trait_sig {
-                                self.upgrade_in_shard(|target| {
-                                    target.#method_name(#(#method_arg_names,)*);
+                                ::eventful_rs::ShardHandle::upgrade_in_shard(self, move |#target_ident| {
+                                    #target_ident.#method_name(#(#method_arg_names,)*);
                                 });
                             }
                         }
                     };
                     action_method_implementation.push(method_impl);
-                } else if attr.path().is_ident("asynced") {
-                    // convert method access to an async call
-                    // call is invoked on the shard that owns this target
-                    // then the result is sent back to the shard from where the call originated from
+                } else if attr
+                    .path()
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "asynced")
+                {
                     let sig = &method.sig;
 
                     let method_name = &sig.ident;
                     let mut method_arg_names = Vec::new();
-                    // let mut method_generic_arg_names = Vec::new();
 
                     for input in &sig.inputs {
                         match input {
@@ -324,31 +335,25 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         }
                     }
 
-                    // for generic in &sig.generics.params {
-                    //     if let syn::GenericParam::Type(type_param) = generic {
-                    //         method_generic_arg_names.push(type_param.ident.clone());
-                    //     }
-                    // }
-
+                    let target_ident = fresh_target(&method_arg_names);
                     let is_async = sig.asyncness.is_some();
                     let mut trait_sig = sig.clone();
                     trait_sig.asyncness = Some(syn::token::Async::default());
                     async_method_signature.push(trait_sig.clone());
 
-                    // generate an implementation for the method in the impl block
                     let method_impl = if is_async {
                         quote! {
                             #trait_sig {
-                                self.deferred_upgrade_in_shard(async |target| {
-                                    target.#method_name(#(#method_arg_names,)*).await
+                                ::eventful_rs::ShardHandle::deferred_upgrade_in_shard(self, async move |#target_ident| {
+                                    #target_ident.#method_name(#(#method_arg_names,)*).await
                                 }).await
                             }
                         }
                     } else {
                         quote! {
                             #trait_sig {
-                                self.deferred_upgrade_in_shard(async |target| {
-                                    target.#method_name(#(#method_arg_names,)*)
+                                ::eventful_rs::ShardHandle::deferred_upgrade_in_shard(self, async move |#target_ident| {
+                                    #target_ident.#method_name(#(#method_arg_names,)*)
                                 }).await
                             }
                         }
@@ -359,7 +364,17 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
-    if action_method_signature.is_empty() {
+    for member in &mut item.items {
+        if let syn::ImplItem::Fn(method) = member {
+            method.attrs.retain(|a| {
+                !a.path()
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "action" || s.ident == "asynced")
+            });
+        }
+    }
+    if action_method_signature.is_empty() && async_method_signature.is_empty() {
         return quote! {
             #item
         }
@@ -369,6 +384,7 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
     quote! {
         #item
 
+        #[allow(async_fn_in_trait)]
         pub trait #trait_name {
             #(#action_method_signature;)*
 
@@ -391,23 +407,15 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
-    // if attr.is_empty() {
-    //     let item = parse_macro_input!(item as ItemStruct);
-    //     let struct_name = &item.ident;
-    //     let (impl_generics, type_generics, where_clause) = item.generics.split_for_impl();
-
-    //     return quote! {
-    //         #item
-
-    //         impl #impl_generics ::eventful_rs::EventTarget for #struct_name #type_generics #where_clause {
-    //             fn event_loop(&self) -> impl ::eventful_rs::EventLoopHandle {
-    //                 default_shard().handle()
-    //             }
-    //         }
-    //     }.into();
-    // }
-
     let mut item = parse_macro_input!(item as ItemStruct);
+    if !item.generics.params.is_empty() {
+        return syn::Error::new_spanned(
+            &item.generics,
+            "generic eventful structs are not supported",
+        )
+        .to_compile_error()
+        .into();
+    }
     let struct_name = &item.ident;
     let needs_to_gen_trait = attr.is_empty();
     let trait_name = if attr.is_empty() {
@@ -416,17 +424,6 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         parse_macro_input!(attr as syn::Path)
     };
-    // let (impl_generics, type_generics, where_clause) = item.generics.split_for_impl();
-    let mut generics = item.generics.clone();
-
-    generics
-        .params
-        .push(syn::parse_quote!(__H: EventLoopHandle));
-    generics
-        .params
-        .push(syn::parse_quote!(__E: ?Sized + Send + 'static));
-
-    // let (impl_generics_handle, _, where_clause_handle) = generics.split_for_impl();
     let (impl_generics, type_generics, where_clause) = item.generics.split_for_impl();
 
     let Some(trait_ident) = trait_name
@@ -439,8 +436,8 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
             .into();
     };
 
-    let set_name = format_ident!("{}EventSet", trait_ident);
-    //let has_name = format_ident!("HasEvents");
+    let mut set_name = trait_name.clone();
+    set_name.segments.last_mut().unwrap().ident = format_ident!("{}EventSet", trait_ident);
     let set_field = format_ident!("events");
 
     match &mut item.fields {
@@ -488,47 +485,9 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         #item
 
-        impl #impl_generics Into<::eventful_rs::ShardRcHandle<#struct_name #type_generics>> for #struct_name #type_generics {
-            fn into(self) -> ::eventful_rs::ShardRcHandle<#struct_name #type_generics> {
-                default_shard().bind(|sharded| sharded(self).as_handle())
-            }
-        }
-
-        // impl #impl_generics ::eventful_rs::EventTarget for #struct_name #type_generics #where_clause {
-        //     fn event_loop(&self) -> impl ::eventful_rs::EventLoopHandle {
-        //         default_shard().handle()
-        //     }
-        // }
 
         impl #impl_generics ::eventful_rs::HasEvents<#set_name>
             for #struct_name #type_generics
-            #where_clause
-        {
-            fn #set_field(&self) -> &std::sync::Arc<#set_name> {
-                &self.#set_field
-            }
-        }
-
-        impl #impl_generics ::eventful_rs::HasEvents<#set_name>
-            for ::eventful_rs::ShardRc<#struct_name #type_generics>
-            #where_clause
-        {
-            fn #set_field(&self) -> &std::sync::Arc<#set_name> {
-                &self.#set_field
-            }
-        }
-
-        impl #impl_generics ::eventful_rs::HasEvents<#set_name>
-            for ::eventful_rs::ShardWeakHandle<#struct_name #type_generics>
-            #where_clause
-        {
-            fn #set_field(&self) -> &std::sync::Arc<#set_name> {
-                &self.#set_field
-            }
-        }
-
-        impl #impl_generics ::eventful_rs::HasEvents<#set_name>
-            for ::eventful_rs::ShardRcHandle<#struct_name #type_generics>
             #where_clause
         {
             fn #set_field(&self) -> &std::sync::Arc<#set_name> {
@@ -541,6 +500,9 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
         {
             type EventSetType = #set_name;
             type EventLoopHandleType = DefaultShardHandleType;
+            fn default_handle() -> Self::EventLoopHandleType {
+                ::eventful_rs::EventLoop::handle(default_shard())
+            }
         }
 
     }
@@ -557,6 +519,55 @@ pub fn asynced(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+#[proc_macro_attribute]
+pub fn sharded_main(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut item = parse_macro_input!(item as syn::ItemFn);
+
+    if item.sig.asyncness.is_none() {
+        return syn::Error::new_spanned(item.sig.fn_token, "sharded_main function must be async")
+            .to_compile_error()
+            .into();
+    }
+
+    if !item.sig.inputs.is_empty() || !item.sig.generics.params.is_empty() {
+        return syn::Error::new_spanned(&item.sig, "sharded_main takes no arguments or generics")
+            .to_compile_error()
+            .into();
+    }
+    let declaration = if attr.is_empty() {
+        quote!(::eventful_rs::shard_main!(MAIN_SHARD);)
+    } else if attr.to_string() == "tokio" {
+        quote!(::eventful_rs::shard_tokio_main!(MAIN_SHARD);)
+    } else {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "expected #[sharded_main] or #[sharded_main(tokio)]",
+        )
+        .to_compile_error()
+        .into();
+    };
+    let mut sig_orig = item.sig.clone();
+    sig_orig.asyncness = None;
+
+    let new_ident = format_ident!("{}_sharded_main", item.sig.ident);
+    item.sig.ident = new_ident.clone();
+
+    quote! {
+        #declaration
+
+        #item
+
+        #sig_orig {
+            let result = MAIN_SHARD.run_main(#new_ident);
+            if let Err(e) = ::eventful_rs::join_all_shards() {
+                panic!("failed to join background shards: {}", e);
+            }
+            result
+        }
+    }
+    .into()
+}
+
 fn pascal(value: &str) -> String {
     value
         .split('_')
@@ -569,4 +580,12 @@ fn pascal(value: &str) -> String {
                 .unwrap_or_default()
         })
         .collect()
+}
+
+fn fresh_target(arguments: &[syn::Ident]) -> syn::Ident {
+    let mut name = "__eventful_target".to_owned();
+    while arguments.iter().any(|a| a == &name) {
+        name.push('_');
+    }
+    format_ident!("{}", name)
 }

@@ -1,0 +1,11 @@
+[package]
+name = "sharded-main"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+assert_cmd = "2"
+
+[dependencies]
+eventful-rs = { path = "../../eventful-rs", default-features = false }

@@ -2,13 +2,16 @@ use std::{any::Any, collections::HashMap, rc::Rc, sync::Arc};
 
 use crate::{EventLoopHandle, Eventful, HasEvents};
 
-pub(crate) trait ShardHandleInternal<T>
+#[doc(hidden)]
+pub trait ShardHandleInternal<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
     fn id(&self) -> usize;
+    fn shard_id(&self) -> crate::ShardId;
 }
 
+#[allow(async_fn_in_trait)]
 pub trait ShardHandle<T>: ShardHandleInternal<T> + Clone + Send + Sync + 'static
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
@@ -38,7 +41,7 @@ where
     fn as_handle(&self) -> impl ShardHandle<T>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
@@ -126,6 +129,9 @@ where
     fn id(&self) -> usize {
         *self.id.id
     }
+    fn shard_id(&self) -> crate::ShardId {
+        self.shard_handle.shard_id()
+    }
 }
 
 impl<T> ShardHandle<T> for ShardRcHandle<T>
@@ -162,7 +168,7 @@ where
         ShardWeakHandle {
             id: *self.id.id,
             shard_handle: self.shard_handle.clone(),
-            events: self.events.clone(),
+            events: Arc::downgrade(&self.events),
         }
     }
 }
@@ -183,7 +189,7 @@ where
 {
     id: usize,
     shard_handle: T::EventLoopHandleType,
-    pub events: Arc<T::EventSetType>,
+    pub events: std::sync::Weak<T::EventSetType>,
 }
 
 impl<T> Clone for ShardWeakHandle<T>
@@ -205,6 +211,9 @@ where
 {
     fn id(&self) -> usize {
         self.id
+    }
+    fn shard_id(&self) -> crate::ShardId {
+        self.shard_handle.shard_id()
     }
 }
 
@@ -294,12 +303,12 @@ impl ShardRcStore {
         self.objects.remove(&id);
     }
 
-    pub fn garbage_collect(&mut self) {
+    pub(crate) fn take_garbage(&mut self) -> Vec<Rc<dyn Any>> {
         let ids_to_remove: Vec<usize> = self
             .objects
             .iter()
-            .filter_map(|(&id, (_, sid))| {
-                if Arc::strong_count(&sid.id) == 1 {
+            .filter_map(|(&id, (obj, sid))| {
+                if Arc::strong_count(&sid.id) == 1 && Rc::strong_count(obj) == 1 {
                     Some(id)
                 } else {
                     None
@@ -307,8 +316,115 @@ impl ShardRcStore {
             })
             .collect();
 
-        for id in ids_to_remove {
-            self.objects.remove(&id);
+        ids_to_remove
+            .into_iter()
+            .filter_map(|id| self.objects.remove(&id).map(|(obj, _)| obj))
+            .collect()
+    }
+}
+
+impl Default for ShardRcStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl<T> Clone for ShardRc<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            inner: self.inner.clone(),
+            shard_handle: self.shard_handle.clone(),
+            events: self.events.clone(),
         }
+    }
+}
+
+impl<T> From<T> for ShardRcHandle<T>
+where
+    T: Eventful<EventLoopHandleType = crate::ShardEventHandle>
+        + HasEvents<T::EventSetType>
+        + Send
+        + 'static,
+{
+    fn from(value: T) -> Self {
+        let handle = T::default_handle();
+        if crate::engine::has_context(handle.shard_id) {
+            crate::engine::bind_here(&crate::engine::store(handle.shard_id), handle, |bind| {
+                bind(value).as_handle()
+            })
+        } else {
+            crate::engine::assert_not_async(
+                "conversion to shard handle blocks; use bind_async from Tokio",
+            );
+            handle
+                .bind_blocking_factory(|bind| bind(value).as_handle())
+                .expect("binding failed")
+        }
+    }
+}
+impl<T> HasEvents<T::EventSetType> for ShardRc<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    fn events(&self) -> &Arc<T::EventSetType> {
+        &self.events
+    }
+}
+impl<T> HasEvents<T::EventSetType> for ShardRcHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    fn events(&self) -> &Arc<T::EventSetType> {
+        &self.events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct Value {
+        events: Arc<()>,
+    }
+    impl Eventful for Value {
+        type EventSetType = ();
+        type EventLoopHandleType = crate::ShardEventHandle;
+    }
+    impl HasEvents<()> for Value {
+        fn events(&self) -> &Arc<()> {
+            &self.events
+        }
+    }
+    #[test]
+    fn collection_preserves_local_references_and_strong_handle_tokens() {
+        let mut store = ShardRcStore::new();
+        let value = Rc::new(Value {
+            events: Arc::new(()),
+        });
+        let token = store.insert(value.clone());
+        assert!(store.take_garbage().is_empty());
+        drop(token);
+        assert!(store.take_garbage().is_empty());
+        drop(value);
+        assert_eq!(store.take_garbage().len(), 1);
+        assert!(store.take_garbage().is_empty());
+    }
+    #[test]
+    fn weak_handle_does_not_keep_event_set_alive() {
+        let (handle, _rx) = crate::ShardEventHandle::channel();
+        let mut store = ShardRcStore::new();
+        let value = Rc::new(Value {
+            events: Arc::new(()),
+        });
+        let id = store.insert(value.clone());
+        let local = ShardRc::new(id, value, handle);
+        let weak = local.as_handle().downgrade();
+        let events = Arc::downgrade(&local.events);
+        drop(local);
+        drop(store.take_garbage());
+        assert!(events.upgrade().is_none());
+        assert!(weak.events.upgrade().is_none());
     }
 }

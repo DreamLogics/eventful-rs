@@ -1,18 +1,30 @@
 [package]
 name = "eventful-rs"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Thread-affine objects, typed events, and asynchronous method dispatch for Rust"
+readme = "README.md"
+documentation = "https://docs.rs/eventful-rs"
+keywords = ["events", "async", "actor", "signals", "tokio"]
+categories = ["asynchronous", "concurrency"]
+include = ["src/**", "tests/**", "README.md", "LICENSE", "Cargo.toml"]
 
 [features]
-default = ["tokio", "slint"]
+default = ["tokio"]
 tokio = ["dep:tokio"]
 slint = ["dep:slint"]
 
 [dependencies]
-eventful-rs-macros = { path = "../eventful-rs-macros" }
+eventful-rs-macros = { version = "0.1.0", path = "../eventful-rs-macros" }
 futures = "0.3"
-tokio = { version = "1", features = [
-    "sync",
-    "rt-multi-thread",
-], optional = true }
-slint = { version = "1.17.1", optional = true }
+futures-timer = "3"
+tokio = { version = "1.48", features = ["sync", "rt", "time", "macros", "net"], optional = true }
+slint = { version = "1.17.1", default-features = false, features = ["std", "compat-1-2"], optional = true }
+
+[dev-dependencies]
+trybuild = "1"
+
+[package.metadata.docs.rs]
+features = ["tokio"]

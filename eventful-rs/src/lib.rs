@@ -1,8 +1,10 @@
-pub use eventful_rs_macros::{action, asynced, asynchronize, eventful, events};
+#![forbid(unsafe_code)]
+#![doc = include_str!("../README.md")]
 
-mod shard_futures;
+pub use eventful_rs_macros::{action, asynced, asynchronize, eventful, events, sharded_main};
 
-mod guarded_refcell;
+mod engine;
+pub use engine::{InvokeError, ShardEventHandle};
 
 mod shard_handle;
 pub use shard_handle::*;
@@ -20,57 +22,76 @@ pub mod tokio_local;
 #[cfg(feature = "slint")]
 pub mod slint;
 
-use std::{
-    pin::Pin,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
-struct ShardRegistryEntry {
-    shard_id: ShardId,
-    join_handle: Box<dyn FnOnce() -> Result<(), ShardError> + Send + 'static>,
+type JoinCallback = Box<dyn Fn() -> Result<(), ShardError> + Send + Sync + 'static>;
+static SHARD_REGISTRY: Mutex<Vec<(ShardId, JoinCallback)>> = Mutex::new(Vec::new());
+
+/// Stop and join registered background shards without holding the registry lock.
+/// Call from synchronous code, after producers have finished submitting work.
+pub fn join_all_shards() -> Result<(), ShardError> {
+    if engine::on_shard_thread() {
+        return Err(ShardError::JoinError(
+            "join all shards from outside their event loops".into(),
+            None,
+        ));
+    }
+    #[cfg(feature = "tokio")]
+    if ::tokio::runtime::Handle::try_current().is_ok() {
+        return Err(ShardError::JoinError(
+            "use join_all_shards_async() from Tokio".into(),
+            None,
+        ));
+    }
+    join_all_shards_blocking()
 }
 
-static SHARD_REGISTRY: ::std::sync::LazyLock<Mutex<Vec<ShardRegistryEntry>>> =
-    ::std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
-
-pub fn join_all_shards() -> Result<(), ShardError> {
-    let mut registry = SHARD_REGISTRY.lock().unwrap();
+fn join_all_shards_blocking() -> Result<(), ShardError> {
+    let entries = std::mem::take(&mut *SHARD_REGISTRY.lock().unwrap());
     let mut errors = Vec::new();
-
-    for entry in registry.drain(..) {
-        if let Err(err) = (entry.join_handle)() {
-            errors.push(err);
+    let mut retry = Vec::new();
+    for (id, join) in entries {
+        if let Err(error) = join() {
+            errors.push(error.to_string());
+            retry.push((id, join));
         }
     }
-
-    if !errors.is_empty() {
-        // Combine all errors into a single error message
-        let combined_message = errors
-            .into_iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(ShardError::JoinError(combined_message, None));
+    SHARD_REGISTRY.lock().unwrap().extend(retry);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ShardError::JoinError(errors.join("; "), None))
     }
-
-    Ok(())
 }
 
-fn register_shard(
-    shard_id: ShardId,
-    join_handle: Box<dyn FnOnce() -> Result<(), ShardError> + Send + 'static>,
-) {
-    let mut registry = SHARD_REGISTRY.lock().unwrap();
-    registry.push(ShardRegistryEntry {
-        shard_id,
-        join_handle,
-    });
+/// Join background shards without blocking a Tokio worker.
+#[cfg(feature = "tokio")]
+pub async fn join_all_shards_async() -> Result<(), ShardError> {
+    if engine::on_shard_thread() {
+        return Err(ShardError::JoinError(
+            "cannot join all shards from a shard thread".into(),
+            None,
+        ));
+    }
+    ::tokio::task::spawn_blocking(join_all_shards_blocking)
+        .await
+        .map_err(|e| ShardError::JoinError(e.to_string(), None))?
+}
+
+fn register_shard(shard_id: ShardId, join: JoinCallback) {
+    SHARD_REGISTRY.lock().unwrap().push((shard_id, join));
 }
 
 #[derive(Debug)]
 pub enum ShardError {
-    JoinError(String, Option<Box<dyn std::error::Error + 'static>>),
-    PostError(String, Option<Box<dyn std::error::Error + 'static>>),
+    JoinError(
+        String,
+        Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    ),
+    PostError(
+        String,
+        Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    ),
 }
 
 impl std::fmt::Display for ShardError {
@@ -109,24 +130,6 @@ impl std::error::Error for ShardError {
             _ => None,
         }
     }
-}
-
-// type Task = Box<dyn FnOnce() + Send + 'static>;
-type FutureId = usize;
-type LocalFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
-
-enum Task<T> {
-    Call(Box<dyn FnOnce() + Send + 'static>),
-
-    CallAsync(Box<dyn FnOnce() -> LocalFuture<'static> + Send + 'static>),
-
-    CallWithContext(Box<dyn FnOnce(&T) + Send + 'static>),
-
-    CallWithContextAsync(Box<dyn for<'a> FnOnce(&'a T) -> LocalFuture<'a> + Send + 'static>),
-
-    Wake(FutureId),
-
-    Stop,
 }
 
 static LAST_SHARD_ID: Mutex<usize> = Mutex::new(0);
@@ -171,7 +174,7 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
         &self,
         handle: H,
         task: F,
-    ) -> impl Future<Output = R> + Send + 'static
+    ) -> futures::future::BoxFuture<'static, R>
     where
         T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + Sized + 'static,
         H: ShardHandle<T>,
@@ -181,22 +184,15 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
     fn spawn<F>(&self, f: F)
     where
         F: Future + Send + 'static;
-    // fn invoke_and_then<F, C, R>(&self, task: F, callback: C)
-    // where
-    //     F: FnOnce() -> R + Send + 'static,
-    //     C: FnOnce(R) + Send + 'static,
-    //     R: Send + 'static;
-    // fn invoke_async_and_then<F, R, C, T>(&self, f: F, callback: C)
-    // where
-    //     F: FnOnce() -> R + Send + 'static,
-    //     R: std::future::Future<Output = T> + Send + 'static,
-    //     T: Send + 'static,
-    //     C: FnOnce(T) + Send + 'static;
 }
 
 pub trait Eventful {
     type EventSetType: ?Sized + Send + Sync + 'static;
     type EventLoopHandleType: EventLoopHandle;
+    /// Default destination used by the convenience From conversion.
+    fn default_handle() -> Self::EventLoopHandleType {
+        panic!("this type has no default shard; construct it with bind/bind_async")
+    }
 }
 
 pub trait HasEvents<E>
@@ -206,15 +202,11 @@ where
     fn events(&self) -> &Arc<E>;
 }
 
-// trait EventLoopInternal {
-//     fn join(&self) -> Result<(), ShardError>;
-// }
-
 pub trait EventLoop {
     type HandleType: EventLoopHandle;
     fn handle(&self) -> Self::HandleType;
     /// Spawn objects bound to this event loop.
-    fn bind<F, R, T>(&'static self, f: F) -> R
+    fn bind<F, R, T>(&self, f: F) -> R
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
@@ -230,10 +222,6 @@ pub trait EventLoop {
     }
     fn join(&self) -> Result<(), ShardError>;
 }
-
-// pub trait EventTarget: Send + Sync + 'static {
-//     fn event_loop(&self) -> impl EventLoopHandle;
-// }
 
 type TaskFn<Args> = dyn Fn(Args) + Send + Sync + 'static;
 
@@ -262,7 +250,6 @@ where
     }
 
     pub fn emit(&self, args: Args) {
-        // Never hold the mutex while user-defined connection code runs.
         let snapshot = self.connections.lock().unwrap().clone();
         for connection in snapshot {
             connection(args.clone());
@@ -277,8 +264,13 @@ where
 #[macro_export]
 macro_rules! use_shard {
     ($name:path) => {
-        fn default_shard() -> &'static impl ::eventful_rs::EventLoop {
+        type DefaultShardHandleType = $crate::ShardEventHandle;
+        fn default_shard() -> &'static impl $crate::EventLoop<HandleType = $crate::ShardEventHandle>
+        {
             &$name
         }
     };
 }
+
+mod background;
+mod main_loop;
