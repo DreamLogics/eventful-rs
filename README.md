@@ -1,13 +1,26 @@
 # eventful-rs
 
-Typed events and asynchronous method calls for objects that stay on one thread.
+Is your Rust code too boring? Want to spice up your async cravings? Then let's make
+things a little more eventful! Add some events to your objects, connect that spaghetti
+and let the magic happen. (or make it explode, whatever works for you)
+
+This crate provides an event and async dispatch system for Rust, focussed mostly on 
+ergonomics rather than performance (no, that doesn't mean performance is going to be shit)
+It is intended for applications that need a simple, safe, and flexible way to handle 
+events and asynchronous method calls on objects that might not live on the same thread.
+
+In concept, you have your stuff living on these little islands called shards. Each shard has it's
+own thread and event loop. You can create objects on a shard, and then call methods on those objects
+from other shards. The calls are queued and executed on the shard's thread, and you can await the 
+result of the call if you want. You can also connect events from one object to another, and when 
+an event is emitted, all connected objects will receive the event on their own shard's thread.
 
 An object can use `Rc`, `Cell`, or `RefCell` internally. Other threads communicate
 through a `ShardRcHandle<T>`; they never receive a reference to the object itself.
 A shard owns the queue, object store, and futures for its objects.
 
 This is an early `0.1` API. It supports a standard thread executor, Tokio runtimes,
-and an optional Slint UI adapter. It is not a distributed actor system.
+and an optional Slint UI adapter. It is not a distributed actor system (yet?).
 
 ## Install
 
@@ -34,24 +47,32 @@ adapter is tested on current stable Rust.
 use eventful_rs::*;
 use std::cell::Cell;
 
-shard_std!(COUNTERS);
-
-#[eventful]
-struct Counter {
-    value: Cell<u32>,
-}
-
-#[asynchronize]
-impl Counter {
-    #[asynced]
-    fn add(&self, amount: u32) -> u32 {
-        let value = self.value.get() + amount;
-        self.value.set(value);
-        value
+mod counters {
+    use super::*;
+    // create a normal shard with it's own thread and event loop
+    // note that this will also make this shard the default for the
+    // current scope
+    shard_std!(COUNTERS);
+    
+    #[eventful]
+    struct Counter {
+        value: Cell<u32>,
+    }
+    
+    #[asynchronize]
+    impl Counter {
+        #[asynced]
+        fn add(&self, amount: u32) -> u32 {
+            let value = self.value.get() + amount;
+            self.value.set(value);
+            value
+        }
     }
 }
 
+
 fn main() {
+    use counters::*;
     let counter = COUNTERS.bind(|bind| {
         bind(Counter { value: Cell::new(0), events: Default::default() }).as_handle()
     });
@@ -106,6 +127,19 @@ Connections use weak targets. They do not keep destination objects or event sets
 alive. Deliveries to missing or stopped targets are ignored. Connections remain in
 the source's connection list until that source event set is dropped; there is not
 yet a disconnect API.
+
+Use `source.message().emit_tracked(text).await` (or
+`self.emit_message_tracked(text).await`) to wait for handler completion. Dispatch
+starts when the method is called, and dropping the future does not cancel queued
+shard deliveries. The future waits for every connection in the emission snapshot,
+then returns `Ok(())` or the first `DeliveryError` in connection order. Tracked
+delivery reports stopped shards, missing weak targets, handler panics, and shutdown
+cancellation. An event with no connections succeeds. Ordinary `emit` continues to
+ignore missing or stopped targets.
+
+For manually constructed `Event` values, `add_connection` tracks completion of the
+callback itself. Use `add_tracked_connection` to supply separate ordinary and
+tracked dispatch callbacks when completion needs to be observed asynchronously.
 
 ## Actions and return values
 

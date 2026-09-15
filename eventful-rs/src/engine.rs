@@ -319,6 +319,20 @@ where
 }
 
 impl EventLoopHandle for ShardEventHandle {
+    fn try_deferred_invoke<T, H, F, R>(
+        &self,
+        handle: H,
+        task: F,
+    ) -> futures::future::BoxFuture<'static, Result<R, InvokeError>>
+    where
+        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + 'static,
+        H: ShardHandle<T>,
+        F: AsyncFnOnce(&T) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        Box::pin(ShardEventHandle::try_deferred_invoke(self, handle, task))
+    }
+
     fn shard_id(&self) -> ShardId {
         self.shard_id
     }

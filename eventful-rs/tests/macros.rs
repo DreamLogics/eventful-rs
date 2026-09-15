@@ -70,3 +70,35 @@ fn generated_dispatch_supports_non_send_objects_and_cross_object_events() {
     assert_eq!(futures::executor::block_on(target.read()), 9);
     WORKER.join().unwrap();
 }
+
+#[test]
+fn generated_tracked_signals_observe_cross_shard_completion_and_closed_targets() {
+    let source_shard = shard::Shard::new("tracked-source");
+    let target_shard = shard::Shard::new("tracked-target");
+    let make_counter = |bind: &dyn Fn(Counter) -> ShardRc<Counter>| {
+        bind(Counter {
+            value: RefCell::new(0),
+            local: Rc::new(()),
+            events: Default::default(),
+        })
+        .as_handle()
+    };
+    let source = source_shard.bind(make_counter);
+    let target = target_shard.bind(make_counter);
+    source.changed().connect(&target);
+    assert_eq!(
+        futures::executor::block_on(source.emit_changed_tracked(12)),
+        Ok(())
+    );
+    assert_eq!(futures::executor::block_on(target.read()), 12);
+    // Submission happens even if the completion future is dropped.
+    drop(source.changed().emit_tracked(23));
+    assert_eq!(futures::executor::block_on(target.read()), 23);
+    target_shard.join().unwrap();
+    assert_eq!(
+        futures::executor::block_on(source.changed().emit_tracked(99)),
+        Err(DeliveryError::Closed)
+    );
+    source.changed().emit(99);
+    source_shard.join().unwrap();
+}

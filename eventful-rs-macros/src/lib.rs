@@ -52,7 +52,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let method_name = &method.sig.ident;
             let signal_name =
                 format_ident!("{}{}Signal", trait_name, pascal(&method_name.to_string()));
-            let emit_name = format_ident!("emit_{}", method_name);
+            //let emit_name = format_ident!("emit_{}", method_name);
 
             let mut names = Vec::new();
             let mut types = Vec::<Type>::new();
@@ -74,7 +74,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
             Some(Ok((
                 method_name.clone(),
                 signal_name,
-                emit_name,
+                //emit_name,
                 names,
                 types,
             )))
@@ -91,8 +91,10 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut extension_signal_methods = Vec::new();
     let mut extension_emitter_methods = Vec::new();
 
-    for (method_name, signal_name, emit_name, arg_names, arg_types) in &methods {
+    for (method_name, signal_name, /*emit_name, */ arg_names, arg_types) in &methods {
         let target_ident = fresh_target(arg_names);
+        let emit_tracked_name = format_ident!("emit_{}_tracked", method_name);
+        let emit_name = format_ident!("emit_{}", method_name);
         signal_defs.push(quote! {
             pub struct #signal_name {
                 inner: ::eventful_rs::Event<(#(#arg_types,)*)>,
@@ -116,10 +118,15 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     #(#arg_types: Clone + Send + 'static,)*
                 {
                     let handle = ::eventful_rs::ShardHandle::downgrade(&::eventful_rs::Sharded::as_handle(target));
-                    self.inner.add_connection(move |(#(#arg_names,)*)| {
+                    let tracked_handle = handle.clone();
+                    self.inner.add_tracked_connection(move |(#(#arg_names,)*)| {
                         ::eventful_rs::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
                             #target_ident.#method_name(#(#arg_names),*);
                         });
+                    }, move |(#(#arg_names,)*)| {
+                        tracked_handle.try_deferred_upgrade_in_shard(async move |#target_ident| {
+                            #target_ident.#method_name(#(#arg_names),*);
+                        })
                     });
                 }
 
@@ -128,6 +135,14 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     #(#arg_types: Clone + Send + 'static,)*
                 {
                     self.inner.emit((#(#arg_names,)*));
+                }
+
+                pub fn emit_tracked(&self, #(#arg_names: #arg_types),*)
+                    -> impl ::core::future::Future<Output = Result<(), ::eventful_rs::DeliveryError>> + Send + 'static + use<>
+                where
+                    #(#arg_types: Clone + Send + 'static,)*
+                {
+                    self.inner.emit_tracked((#(#arg_names,)*))
                 }
             }
         });
@@ -143,6 +158,14 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 #(#arg_types: Clone + Send + 'static,)*
             {
                 self.events().#method_name.emit(#(#arg_names),*);
+            }
+
+            fn #emit_tracked_name(&self, #(#arg_names: #arg_types),*)
+                -> impl ::core::future::Future<Output = Result<(), ::eventful_rs::DeliveryError>> + Send + 'static
+            where
+                #(#arg_types: Clone + Send + 'static,)*
+            {
+                self.events().#method_name.emit_tracked(#(#arg_names),*)
             }
         });
     }

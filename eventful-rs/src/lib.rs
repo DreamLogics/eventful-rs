@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
 pub use eventful_rs_macros::{action, asynced, asynchronize, eventful, events, sharded_main};
@@ -6,12 +5,18 @@ pub use eventful_rs_macros::{action, asynced, asynchronize, eventful, events, sh
 mod engine;
 pub use engine::{InvokeError, ShardEventHandle};
 
+/// A tracked event handler failed to complete. Uses the same failure reasons as
+/// deferred shard invocations.
+pub type DeliveryError = InvokeError;
+
 mod shard_handle;
 pub use shard_handle::*;
 
 pub mod local;
 
 pub mod shard;
+
+//pub mod rv;
 
 #[cfg(feature = "tokio")]
 pub mod tokio;
@@ -181,6 +186,31 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static;
 
+    /// Submit a callback immediately and report its completion. Backends may
+    /// override this to distinguish rejection and missing targets from cancellation.
+    fn try_deferred_invoke<T, H, F, R>(
+        &self,
+        handle: H,
+        task: F,
+    ) -> futures::future::BoxFuture<'static, Result<R, InvokeError>>
+    where
+        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + Sized + 'static,
+        H: ShardHandle<T>,
+        F: AsyncFnOnce(&T) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        use futures::FutureExt;
+        let (tx, rx) = futures::channel::oneshot::channel();
+        self.invoke_with_handle_async(handle, async move |target| {
+            let result = std::panic::AssertUnwindSafe(async move { task(target).await })
+                .catch_unwind()
+                .await
+                .map_err(|_| InvokeError::Panicked);
+            let _ = tx.send(result);
+        });
+        Box::pin(async move { rx.await.map_err(|_| InvokeError::Canceled)? })
+    }
+
     fn spawn<F>(&self, f: F)
     where
         F: Future + Send + 'static;
@@ -224,10 +254,19 @@ pub trait EventLoop {
 }
 
 type TaskFn<Args> = dyn Fn(Args) + Send + Sync + 'static;
+type TrackedTaskFn<Args> = dyn Fn(Args) -> futures::future::BoxFuture<'static, Result<(), DeliveryError>>
+    + Send
+    + Sync
+    + 'static;
+
+struct Connection<Args> {
+    emit: Arc<TaskFn<Args>>,
+    tracked: Arc<TrackedTaskFn<Args>>,
+}
 
 /// Type-erased connection storage for one signal signature.
 pub struct Event<Args> {
-    connections: Mutex<Vec<Arc<TaskFn<Args>>>>,
+    connections: Mutex<Vec<Arc<Connection<Args>>>>,
 }
 
 impl<Args> Default for Event<Args> {
@@ -246,13 +285,71 @@ where
     where
         F: Fn(Args) + Send + Sync + 'static,
     {
-        self.connections.lock().unwrap().push(Arc::new(connection));
+        let connection = Arc::new(connection);
+        let emit = connection.clone();
+        self.add_tracked_connection(
+            move |args| emit(args),
+            move |args| {
+                connection(args);
+                std::future::ready(Ok(()))
+            },
+        );
+    }
+
+    /// Register ordinary dispatch and tracked dispatch for the same connection.
+    /// Tracked dispatch must submit work immediately; its returned future observes
+    /// completion. Dropping that future should not cancel the submitted work.
+    pub fn add_tracked_connection<F, G, Fut>(&self, emit: F, tracked: G)
+    where
+        F: Fn(Args) + Send + Sync + 'static,
+        G: Fn(Args) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), DeliveryError>> + Send + 'static,
+    {
+        self.connections.lock().unwrap().push(Arc::new(Connection {
+            emit: Arc::new(emit),
+            tracked: Arc::new(move |args| Box::pin(tracked(args))),
+        }));
     }
 
     pub fn emit(&self, args: Args) {
         let snapshot = self.connections.lock().unwrap().clone();
         for connection in snapshot {
-            connection(args.clone());
+            (connection.emit)(args.clone());
+        }
+    }
+
+    /// Dispatch to a snapshot of the connections immediately, then wait for every
+    /// handler to complete. Returns the first error in connection order after all
+    /// deliveries settle; an empty event succeeds. Panics are reported as errors.
+    /// Dropping the returned future does not cancel submitted shard deliveries.
+    /// Plain `add_connection` callbacks are complete when they return; work they
+    /// independently spawn is not tracked.
+    pub fn emit_tracked(
+        &self,
+        args: Args,
+    ) -> impl Future<Output = Result<(), DeliveryError>> + Send + 'static + use<Args> {
+        use futures::FutureExt;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let snapshot = self.connections.lock().unwrap().clone();
+        let mut deliveries = Vec::with_capacity(snapshot.len());
+        for connection in snapshot {
+            let delivery = catch_unwind(AssertUnwindSafe(|| (connection.tracked)(args.clone())));
+            deliveries.push(async move {
+                match delivery {
+                    Ok(future) => AssertUnwindSafe(future)
+                        .catch_unwind()
+                        .await
+                        .unwrap_or(Err(DeliveryError::Panicked)),
+                    Err(_) => Err(DeliveryError::Panicked),
+                }
+            });
+        }
+        async move {
+            futures::future::join_all(deliveries)
+                .await
+                .into_iter()
+                .collect()
         }
     }
 

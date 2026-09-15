@@ -245,3 +245,54 @@ fn deferred_future_outlives_the_submitting_handle() {
     assert_eq!(block_on(result), 23);
     shard.join().unwrap();
 }
+
+#[test]
+fn tracked_events_report_async_handler_completion_panic_and_cancellation() {
+    let shard = shard::Shard::try_new("tracked-async", Duration::from_millis(20)).unwrap();
+    let object = shard.bind(|bind| bind(Object::new()).as_handle());
+    let event = Event::<usize>::default();
+    let handle = shard.handle();
+    let target = object.clone();
+    event.add_tracked_connection(
+        |_| {},
+        move |n| {
+            handle.try_deferred_invoke(target.clone(), async move |o| {
+                futures_timer::Delay::new(Duration::from_millis(1)).await;
+                o.value.replace(n);
+            })
+        },
+    );
+    assert_eq!(block_on(event.emit_tracked(42)), Ok(()));
+    assert_eq!(
+        block_on(
+            shard
+                .handle()
+                .try_deferred_invoke(object.clone(), async |o| *o.value.borrow())
+        ),
+        Ok(42)
+    );
+
+    let panic_event = Event::<()>::default();
+    let handle = shard.handle();
+    let target = object.clone();
+    panic_event.add_tracked_connection(
+        |_| {},
+        move |_| handle.try_deferred_invoke(target.clone(), async |_| panic!("expected panic")),
+    );
+    assert_eq!(
+        block_on(panic_event.emit_tracked(())),
+        Err(DeliveryError::Panicked)
+    );
+
+    let pending_event = Event::<()>::default();
+    let handle = shard.handle();
+    pending_event.add_tracked_connection(
+        |_| {},
+        move |_| {
+            handle.try_deferred_invoke(object.clone(), async |_| std::future::pending::<()>().await)
+        },
+    );
+    let delivery = pending_event.emit_tracked(());
+    shard.join().unwrap();
+    assert_eq!(block_on(delivery), Err(DeliveryError::Canceled));
+}

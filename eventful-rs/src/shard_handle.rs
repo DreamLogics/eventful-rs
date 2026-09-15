@@ -217,6 +217,23 @@ where
     }
 }
 
+impl<T> ShardWeakHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
+{
+    /// Submit immediately and observe completion, including delivery failures.
+    pub fn try_deferred_upgrade_in_shard<F, R>(
+        &self,
+        task: F,
+    ) -> futures::future::BoxFuture<'static, Result<R, crate::InvokeError>>
+    where
+        F: AsyncFnOnce(&T) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.shard_handle.try_deferred_invoke(self.clone(), task)
+    }
+}
+
 impl<T> ShardHandle<T> for ShardWeakHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
