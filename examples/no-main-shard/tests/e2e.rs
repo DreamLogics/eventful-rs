@@ -2,7 +2,7 @@ use std::time::Duration;
 
 #[test]
 fn example_completes_with_expected_output() {
-    let assertion = assert_cmd::Command::new(env!("CARGO_BIN_EXE_basics-example"))
+    let assertion = assert_cmd::Command::new(env!("CARGO_BIN_EXE_no-main-shard"))
         .timeout(Duration::from_secs(20))
         .assert()
         .success();

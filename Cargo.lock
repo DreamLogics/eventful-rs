@@ -98,14 +98,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
-name = "basics-example"
-version = "0.1.0"
-dependencies = [
- "assert_cmd",
- "eventful-rs",
-]
-
-[[package]]
 name = "bincode"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1414,6 +1406,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "no-main-shard-example"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "eventful-rs",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1948,6 +1948,7 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "eventful-rs",
+ "futures",
 ]
 
 [[package]]

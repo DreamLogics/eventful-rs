@@ -7,8 +7,6 @@ use crate::bar::BAR_SHARD;
 
 shard_std!(FOO_SHARD);
 
-// mod expanded;
-
 #[events]
 trait FooEvents {
     fn on_hello(&self, name: String);

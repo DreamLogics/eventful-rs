@@ -4,15 +4,15 @@ Is your Rust code too boring? Want to spice up your async cravings? Then let's m
 things a little more eventful! Add some events to your objects, connect that spaghetti
 and let the magic happen. (or make it explode, whatever works for you)
 
-This crate provides an event and async dispatch system for Rust, focussed mostly on 
-ergonomics rather than performance (no, that doesn't mean performance is going to be shit)
-It is intended for applications that need a simple, safe, and flexible way to handle 
+This crate provides an event and async dispatch system for Rust, focused mostly on
+ergonomics rather than performance. (no, that doesn't mean performance is going to be shit)
+It is intended for applications that need a simple, safe, and flexible way to handle
 events and asynchronous method calls on objects that might not live on the same thread.
 
 In concept, you have your stuff living on these little islands called shards. Each shard has it's
 own thread and event loop. You can create objects on a shard, and then call methods on those objects
-from other shards. The calls are queued and executed on the shard's thread, and you can await the 
-result of the call if you want. You can also connect events from one object to another, and when 
+from other shards. The calls are queued and executed on the shard's thread, and you can await the
+result of the call if you want. You can also connect events from one object to another, and when
 an event is emitted, all connected objects will receive the event on their own shard's thread.
 
 An object can use `Rc`, `Cell`, or `RefCell` internally. Other threads communicate
@@ -43,48 +43,255 @@ adapter is tested on current stable Rust.
 
 ## Quick start
 
+The [annotated sharded-main example](examples/sharded-main/src/main.rs) shows a
+producer on a background shard sending events to a reporter on the main-thread
+shard. Run it with `cargo run -p sharded-main`.
+
+`#[sharded_main]` drives the main shard while `main` awaits work, allowing the
+reporter to process events while the producer runs on its own thread. It also
+joins the background shards when the main shard finishes.
+
 ```rust
 use eventful_rs::*;
-use std::cell::Cell;
 
-mod counters {
-    use super::*;
-    // create a normal shard with it's own thread and event loop
-    // note that this will also make this shard the default for the
-    // current scope
-    shard_std!(COUNTERS);
-    
-    #[eventful]
-    struct Counter {
-        value: Cell<u32>,
+mod producer {
+    use std::cell::Cell;
+
+    use eventful_rs::*;
+
+    shard_std!(PRODUCER);
+
+    #[events]
+    pub trait ProducerEvents {
+        fn on_produce(&self, item: String);
     }
-    
+
+    #[eventful(ProducerEvents)]
+    pub struct Producer {
+        count: Cell<usize>,
+    }
+
     #[asynchronize]
-    impl Counter {
+    impl Producer {
+        pub fn new() -> ShardRcHandle<Self> {
+            Self {
+                events: Default::default(),
+                count: Cell::new(0),
+            }
+            .into()
+        }
+
+        // This method produces items and emits events for each produced item.
+        // The `#[asynced]` attribute allows this method to be called asynchronously,
+        // even though it is not an async function itself. All that is made async is the
+        // wrapper that calls this method, so it can be called from an async context without blocking.
+        // This version doesn't track the event emissions, meaning there is no guarantee that the events
+        // have been processed by the listeners before this method returns.
+
         #[asynced]
-        fn add(&self, amount: u32) -> u32 {
-            let value = self.value.get() + amount;
-            self.value.set(value);
-            value
+        pub fn produce(&self, count: usize) -> Vec<String> {
+            for i in 0..count {
+                let item = format!("Item {}", i);
+                self.emit_on_produce(item.clone());
+            }
+            self.count.update(|c| c + count);
+            (0..count).map(|i| format!("Item {}", i)).collect()
+        }
+
+        // This is the same as the previous method, but it tracks the event emissions.
+        // It uses `futures::future::join_all` to wait for all event emissions to complete
+        // before returning. This ensures that all events have been processed by the listeners
+        // before this method returns.
+
+        #[asynced]
+        pub async fn produce_tracked(&self, count: usize) -> Vec<String> {
+            let tracking = (0..count).map(|i| {
+                let item = format!("Item {}", i);
+                self.emit_on_produce_tracked(item.clone())
+            });
+            futures::future::join_all(tracking).await;
+
+            self.count.update(|c| c + count);
+            (0..count).map(|i| format!("Item {}", i)).collect()
+        }
+
+        // An alternative to asynced wrappers is to use the `#[action]` attribute,
+        // it functions more or less the same as `#[asynced]`, but it doesn't return anything,
+        // thus making it a bit more lightweight. Also, the wrapper is just a normal function,
+        // so it can be called from any context, not just async contexts.
+        // This is useful for methods that don't need to return a value,
+        // but still need to be called asynchronously.
+
+        #[action]
+        pub fn reset_count(&self) {
+            self.count.set(0);
+        }
+
+        // Pretty much anything can be made asynced (or an action), as long as the arguments and
+        // return values are Send + 'static.
+
+        #[asynced]
+        pub fn get_count(&self) -> usize {
+            self.count.get()
+        }
+
+        // Normal methods won't be available from outside the shard, but can be called like normal
+        // from within the same shard.
+
+        pub fn internal_report(&self) -> String {
+            format!("Produced {} items", self.count.get())
         }
     }
 }
 
+#[eventful]
+struct ProductionReporter {}
 
-fn main() {
-    use counters::*;
-    let counter = COUNTERS.bind(|bind| {
-        bind(Counter { value: Cell::new(0), events: Default::default() }).as_handle()
+impl ProductionReporter {
+    pub fn new() -> ShardRcHandle<Self> {
+        Self {
+            events: Default::default(),
+        }
+        .into()
+    }
+}
+
+impl producer::ProducerEvents for ProductionReporter {
+    fn on_produce(&self, item: String) {
+        println!("Produced: {}", item);
+    }
+}
+
+#[sharded_main]
+async fn main() {
+    use producer::*;
+
+    // create our objects
+    let producer = Producer::new();
+    let reporter = ProductionReporter::new();
+
+    // connect the reporter to the producer's events
+    producer.on_produce().connect(&reporter);
+
+    // produce some items
+    // you will notice that this call may return before the reporter has
+    // finished processing all events, because we are not tracking if all
+    // callbacks have been called before returning
+    let produced = producer.produce(12).await;
+    println!("Produced items untracked: {:?}", produced);
+
+    // produce some items, but this time we will track the event emissions
+    // this means that this call will not return until all callbacks have been called
+    let produced_tracked = producer.produce_tracked(12).await;
+    println!("Produced items tracked: {:?}", produced_tracked);
+
+    // we can also turn our handle back into a reference to the object
+    // the closure will run on the shard/thread this handle's object lives in
+    producer.upgrade_in_shard(|producer| {
+        // this will run on the producer shard/thread
+        println!("Report: {}", producer.internal_report());
     });
-    assert_eq!(futures::executor::block_on(counter.add(3)), 3);
-    COUNTERS.join().unwrap();
+
+    // using an asynced method wrapper is often more convenient than
+    // upgrading a handle, but does require an async context
+    let count = producer.get_count().await;
+    println!("Count from async call: {}", count);
+
+    // we can also join two handles, but they must be on the same shard
+    // this allows us to upgrade both handles at the same time,
+    // and run a closure on the shard/thread they live in
+    let another_producer = Producer::new();
+    let joined = producer.join(&another_producer).expect("same shard");
+
+    joined.upgrade_in_shard(|(producer1, producer2)| {
+        // this will run on the producer shard/thread
+        println!(
+            "Report from joined handles: {}",
+            producer1.internal_report()
+        );
+        println!(
+            "Report from joined handles: {}",
+            producer2.internal_report()
+        );
+    });
+
+    // there might be instances where no async context is available,
+    // luckily asynced action methods do not require one
+    fn sync_context(producer: ShardRcHandle<Producer>) {
+        // we can also call an action method from a sync context
+        producer.reset_count();
+    }
+    sync_context(producer.clone());
 }
 ```
 
-`#[eventful]` adds an `events` field and implements the object traits. The shard
-macro supplies the default destination for the module. Construct values inside
-`bind` to keep even non-`Send` objects on their owner thread. The returned value
-must be `Send`; return `.as_handle()`, not a `ShardRc<T>`.
+### What to use when
+
+- **Choose where objects live.** `shard_std!(PRODUCER)` supplies the producer
+  module's default shard. `#[sharded_main]` supplies the main-thread default used
+  by `ProductionReporter`. Their constructors return `ShardRcHandle<Self>` via
+  `.into()`, binding each object to its default shard. `#[eventful]` adds the
+  `events` field and object traits.
+- **Connect objects through events.** `#[events]` defines `ProducerEvents`;
+  `#[eventful(ProducerEvents)]` lets `Producer` emit them. Implementing that trait
+  on `ProductionReporter` supplies the callbacks. `connect(&reporter)` arranges
+  for those callbacks to run on the reporter's shard.
+- **Await a method result.** `#[asynchronize]` generates handle methods for the
+  annotated `impl`. `#[asynced]` makes the handle wrapper async, even for an
+  ordinary method such as `produce` or `get_count`. The original method runs on
+  the object's shard, and awaiting the wrapper returns its result.
+- **Wait for event listeners too.** Awaiting `produce` only waits for the producer
+  method; its untracked events may still be pending. `produce_tracked` awaits
+  `join_all` over the tracked emissions, so every delivery has completed or
+  reported a failure before it returns. The example discards those results;
+  inspect the returned `Result<(), DeliveryError>` values when failures matter.
+- **Queue work from synchronous code.** `#[action]` generates a normal handle
+  method that queues work and returns immediately. `reset_count()` needs no
+  `.await` or async caller; returning from it does not mean the reset has run.
+- **Call ordinary methods on the object.** `internal_report` has no generated
+  handle wrapper. `upgrade_in_shard` queues a closure that receives `&Producer`
+  on the producer's shard, where it can call that method directly. The reference
+  stays inside the callback; it is not returned to the calling thread.
+- **Work with several objects together.** `producer.join(&another_producer)`
+  checks that both handles share a shard. The resulting group upgrades them in
+  one callback, as a tuple of references, while keeping the original handles
+  usable.
+
+The dispatch arguments and results must be `Send + 'static`; the objects
+can use `Cell`, `RefCell`, and `Rc` internally. The example's `Cell<usize>` is
+`Send`, so its constructor can use `.into()`. For non-`Send` values such as `Rc`,
+construct inside a `bind` factory and return `.as_handle()`. See
+[Async callers and construction](#async-callers-and-construction) for the blocking
+behavior of `.into()` and the `bind_async` alternative for Tokio callers.
+
+## Joining handles
+
+Use `foo.join(&bar)` to group strong handles on the same shard. It returns
+`Some(JoinedHandles<...>)` when their shard IDs match, otherwise `None`.
+
+```rust
+if let Some(joined) = foo.join(&bar) {
+    joined.upgrade_in_shard(|(foo, bar)| {
+        foo.something();
+        bar.something();
+    });
+}
+```
+
+Joins borrow their inputs and clone the handles only when their shard IDs match.
+The returned group owns its handles. Chain `.join(&baz)` to extend the flat tuple
+to as many as eight handles. Objects can have different types, and the same handle
+can appear more than once.
+
+Joined handles also provide `upgrade_in_shard_async`, `deferred_upgrade_in_shard`,
+and `try_deferred_upgrade_in_shard`, with callbacks taking a tuple of references.
+All objects are resolved in one job on their shared shard and kept alive for the
+callback. Async callbacks can interleave with other jobs while suspended.
+
+Joining checks shard identity, not whether the shard is running. Like single
+handle upgrades, fire-and-forget callbacks are skipped after shutdown; the
+`try_deferred` method reports `InvokeError::Closed`. This API supports
+`ShardRcHandle<T>` using the built-in `ShardEventHandle` shared by the backends.
 
 ## Typed events
 
@@ -151,9 +358,19 @@ Put `#[asynchronize]` on a non-generic inherent `impl`:
 | `#[asynced]` | Synchronous or async, returns `R`  | Returns an async operation yielding `R` |
 
 Generated methods require `&self`. Arguments captured for dispatch and returned
-values must be `Send + 'static`. Async actions must be awaited inside the shard;
-they are not completed when the caller's action method returns. `#[asynced]`
-methods submit when their generated future is polled, as ordinary async methods do.
+values must be `Send + 'static`. The original method keeps its synchronous or
+async signature; these attributes control the wrapper on the handle. For an
+async action, the generated wrapper arranges for the shard to await the method.
+The caller does not await the action, and its return does not signal completion.
+`#[asynced]` methods submit when their generated future is polled, as ordinary
+async methods do. Awaiting them waits for the method's result, including any
+tracked emissions it explicitly awaits; it does not track ordinary emissions.
+
+Unannotated methods, such as `internal_report` in the example, remain ordinary
+object methods. Use `upgrade_in_shard` to call them in a queued callback with a
+local object reference. That helper also works from synchronous code and returns
+without waiting. Use `deferred_upgrade_in_shard` when the callback needs to return
+a result to the caller.
 
 For explicit errors rather than a panic on cancellation, use
 `handle.try_deferred_invoke(object_handle, async |object| { /* result */ })`.
@@ -248,7 +465,7 @@ field is a `Weak` pointer, not an owning `Arc`.
 From the workspace root:
 
 ```sh
-cargo run -p basics-example
+cargo run -p no-main-shard
 cargo run -p sharded-main
 cargo run -p example_tokio
 cargo test --workspace
@@ -256,6 +473,11 @@ cargo test -p eventful-rs --no-default-features
 cargo check -p eventful-rs --all-features
 cargo test -p eventful-rs --all-features --test slint
 ```
+
+The primary `sharded-main` example demonstrates generated method wrappers,
+tracked and untracked events, local callbacks, and joined handles. The
+`no-main-shard` example uses a normal synchronous `main`, explicit `bind`
+factories, and callbacks on two background shards.
 
 The HTTP example runs a local HTTP server and needs no external website. Tests
 include Rust e2e tests in each example crate, using `assert_cmd` to check the real

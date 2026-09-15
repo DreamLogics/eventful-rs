@@ -6,6 +6,12 @@ use syn::{
     FnArg, ItemImpl, ItemStruct, ItemTrait, Pat, TraitItem, Type, parse_macro_input, parse_quote,
 };
 
+/// Define a typed event interface with synchronous `&self` methods.
+///
+/// Attach it to a source with `#[eventful(Interface)]` and implement it on
+/// listeners. `source.event_name().connect(&listener)` dispatches callbacks on
+/// each listener's shard. Ordinary emissions do not wait for listeners; tracked
+/// emissions return a future that observes completion and delivery errors.
 #[proc_macro_attribute]
 pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let trait_item = parse_macro_input!(item as ItemTrait);
@@ -211,6 +217,13 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
+/// Generate handle wrappers for annotated methods in an inherent `impl`.
+///
+/// Mark methods with `#[asynced]` to await their results, or `#[action]` to queue
+/// work from synchronous or async code without waiting. Original object methods
+/// keep their signatures. Unannotated methods remain accessible through local
+/// object references, including inside `upgrade_in_shard` callbacks.
+/// Dispatched methods require `&self` and `Send + 'static` arguments and results.
 #[proc_macro_attribute]
 pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(item as ItemImpl);
@@ -428,6 +441,11 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }.into()
 }
 
+/// Add an `events` field and the object traits needed for shard binding.
+///
+/// Pass an event interface, as in `#[eventful(ProducerEvents)]`, to let the object
+/// emit those events. The shard declaration in scope supplies its default shard.
+/// Initialize the generated field with `events: Default::default()`.
 #[proc_macro_attribute]
 pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(item as ItemStruct);
@@ -532,16 +550,35 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
+/// Mark a method in an `#[asynchronize]` impl for fire-and-forget dispatch.
+///
+/// The method must return `()`, and can be synchronous or async. Its handle
+/// wrapper is a normal function: it queues work and returns immediately, so no
+/// async caller or `.await` is needed. The shard awaits an async original method;
+/// returning from the handle call does not signal completion.
 #[proc_macro_attribute]
 pub fn action(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+/// Mark a method in an `#[asynchronize]` impl for an async handle wrapper.
+///
+/// The original method may be synchronous or async. Polling the handle wrapper
+/// queues the call on the object's shard; awaiting it returns the method's result.
+/// This does not wait for untracked events emitted by the method. Await tracked
+/// emissions inside the method when listener completion is part of its work.
 #[proc_macro_attribute]
 pub fn asynced(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+/// Run an async main function on a main-thread shard and join background shards.
+///
+/// Supplies the default main-thread shard for objects declared in its scope.
+/// The shard continues processing callbacks while the main future awaits work,
+/// allowing background objects to deliver events to main-thread listeners.
+/// Use `#[sharded_main(tokio)]` for Tokio timers and I/O; the default uses
+/// executor-independent futures. The main function's return type is preserved.
 #[proc_macro_attribute]
 pub fn sharded_main(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(item as syn::ItemFn);

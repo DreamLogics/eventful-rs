@@ -7,6 +7,6 @@ fn example_completes_with_expected_output() {
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&assertion.get_output().stdout);
-    assert_eq!(stdout.matches("Produced: Item").count(), 12, "{stdout}");
-    assert_eq!(stdout.matches("Produced items:").count(), 1, "{stdout}");
+    assert_eq!(stdout.matches("Produced: Item").count(), 24, "{stdout}");
+    assert_eq!(stdout.matches("Produced items").count(), 2, "{stdout}");
 }

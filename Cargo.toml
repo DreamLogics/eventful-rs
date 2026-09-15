@@ -1,5 +1,11 @@
 [workspace]
-members = ["eventful-rs", "eventful-rs-macros", "examples/basics", "examples/tokio", "examples/sharded-main"]
+members = [
+    "eventful-rs",
+    "eventful-rs-macros",
+    "examples/no-main-shard",
+    "examples/tokio",
+    "examples/sharded-main",
+]
 resolver = "3"
 
 [workspace.package]

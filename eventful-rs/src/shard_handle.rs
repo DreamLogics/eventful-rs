@@ -2,6 +2,9 @@ use std::{any::Any, collections::HashMap, rc::Rc, sync::Arc};
 
 use crate::{EventLoopHandle, Eventful, HasEvents};
 
+mod joined;
+pub use joined::JoinedHandles;
+
 #[doc(hidden)]
 pub trait ShardHandleInternal<T>
 where
@@ -11,19 +14,35 @@ where
     fn shard_id(&self) -> crate::ShardId;
 }
 
+/// Dispatch work to an object's shard through a thread-safe handle.
+///
+/// The callbacks receive local references on the object's owner thread. They can
+/// call ordinary object methods that have no generated handle wrapper.
 #[allow(async_fn_in_trait)]
 pub trait ShardHandle<T>: ShardHandleInternal<T> + Clone + Send + Sync + 'static
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
+    /// Queue a callback with a local object reference and return without waiting.
+    ///
+    /// Usable from synchronous code. The reference stays on the object's shard;
+    /// a missing target or stopped built-in shard silently skips the callback.
     fn upgrade_in_shard<F>(&self, task: F)
     where
         F: FnOnce(&T) + Send + 'static;
 
+    /// Queue an async callback without requiring an async caller.
+    ///
+    /// The shard awaits the callback; other jobs may run while it is suspended.
     fn upgrade_in_shard_async<F>(&self, task: F)
     where
         F: AsyncFnOnce(&T) -> () + Send + 'static;
 
+    /// Await a callback's result while it runs on the object's shard.
+    ///
+    /// Submission starts when this future is polled. The built-in backend panics
+    /// if the result cannot be delivered. Untracked events emitted by the callback
+    /// may still be pending when this returns.
     async fn deferred_upgrade_in_shard<F, R>(&self, task: F) -> R
     where
         F: AsyncFnOnce(&T) -> R + Send + 'static,

@@ -103,7 +103,7 @@ impl ShardEventHandle {
             rx,
         )
     }
-    fn post(&self, job: Job) -> Result<(), InvokeError> {
+    pub(crate) fn post(&self, job: Job) -> Result<(), InvokeError> {
         let command = Command::Job(job);
         let result = {
             let tx = self.sender.lock().unwrap();
