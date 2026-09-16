@@ -72,7 +72,7 @@ macro_rules! joined_upgrades {
             $($ty: Eventful<EventLoopHandleType = ShardEventHandle>
                 + HasEvents<$ty::EventSetType> + 'static,)+
         {
-            /// Run a callback with all objects on their shared shard.
+            /// Run a callback with all values on their shared shard.
             /// A stopped shard silently skips the callback, as for a single handle.
             pub fn upgrade_in_shard<F>(&self, task: F)
             where
@@ -91,7 +91,7 @@ macro_rules! joined_upgrades {
                 }));
             }
 
-            /// Run an async callback with all objects on their shared shard.
+            /// Run an async callback with all values on their shared shard.
             /// Other jobs may run while the callback is suspended.
             pub fn upgrade_in_shard_async<F>(&self, task: F)
             where
@@ -137,7 +137,7 @@ macro_rules! joined_upgrades {
                         let result = AssertUnwindSafe(async move {
                             let ($($value,)+) = &handles;
                             $(let $value = { store.borrow().get::<$ty>($value.id()) }
-                                .ok_or(InvokeError::ObjectMissing)?;)+
+                                .ok_or(InvokeError::ValueMissing)?;)+
                             let result = task(($(&$value,)+)).await;
                             drop(handles);
                             Ok(result)

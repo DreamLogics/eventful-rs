@@ -7,13 +7,13 @@ use std::{
     time::Duration,
 };
 
-struct Object {
+struct TestState {
     value: RefCell<usize>,
     local: Rc<()>,
     events: Arc<()>,
     dropped: Option<mpsc::Sender<std::thread::ThreadId>>,
 }
-impl Object {
+impl TestState {
     fn new() -> Self {
         Self {
             value: RefCell::new(0),
@@ -23,16 +23,16 @@ impl Object {
         }
     }
 }
-impl Eventful for Object {
+impl Eventful for TestState {
     type EventSetType = ();
     type EventLoopHandleType = ShardEventHandle;
 }
-impl HasEvents<()> for Object {
+impl HasEvents<()> for TestState {
     fn events(&self) -> &Arc<()> {
         &self.events
     }
 }
-impl Drop for Object {
+impl Drop for TestState {
     fn drop(&mut self) {
         if let Some(tx) = &self.dropped {
             let _ = tx.send(std::thread::current().id());
@@ -42,9 +42,9 @@ impl Drop for Object {
 
 fn exercise(shard: &impl EventLoop<HandleType = ShardEventHandle>) {
     let handle = shard.handle();
-    let object = shard.bind(|bind| bind(Object::new()).as_handle());
+    let state = shard.bind(|bind| bind(TestState::new()).as_handle());
     let (go, ready) = oneshot::channel();
-    let first = handle.try_deferred_invoke(object.clone(), async move |o| {
+    let first = handle.try_deferred_invoke(state.clone(), async move |o| {
         ready.await.unwrap();
         *o.value.borrow_mut() += 1;
         assert_eq!(Rc::strong_count(&o.local), 1);
@@ -56,15 +56,15 @@ fn exercise(shard: &impl EventLoop<HandleType = ShardEventHandle>) {
     let owner = block_on(first).unwrap();
     assert_ne!(owner, std::thread::current().id());
     assert_eq!(
-        block_on(handle.try_deferred_invoke(object.clone(), async |o| *o.value.borrow())),
+        block_on(handle.try_deferred_invoke(state.clone(), async |o| *o.value.borrow())),
         Ok(1)
     );
-    let panicked = handle.try_deferred_invoke(object.clone(), async |_| -> usize {
+    let panicked = handle.try_deferred_invoke(state.clone(), async |_| -> usize {
         panic!("expected panic")
     });
     assert_eq!(block_on(panicked), Err(InvokeError::Panicked));
     assert_eq!(
-        block_on(handle.try_deferred_invoke(object, async |_| 42)),
+        block_on(handle.try_deferred_invoke(state, async |_| 42)),
         Ok(42)
     );
 }
@@ -83,13 +83,13 @@ fn tokio_concurrency_results_and_panic_isolation() {
     shard.join().unwrap();
 }
 #[test]
-fn wrong_shard_never_resolves_colliding_object_id() {
+fn wrong_shard_never_resolves_colliding_value_id() {
     let a = shard::Shard::new("a");
     let b = shard::Shard::new("b");
-    let object = a.bind(|bind| bind(Object::new()).as_handle());
-    let _other = b.bind(|bind| bind(Object::new()).as_handle());
+    let state = a.bind(|bind| bind(TestState::new()).as_handle());
+    let _other = b.bind(|bind| bind(TestState::new()).as_handle());
     assert_eq!(
-        block_on(b.handle().try_deferred_invoke(object, async |_| 1)),
+        block_on(b.handle().try_deferred_invoke(state, async |_| 1)),
         Err(InvokeError::WrongShard)
     );
     a.join().unwrap();
@@ -98,36 +98,36 @@ fn wrong_shard_never_resolves_colliding_object_id() {
 #[test]
 fn shutdown_cancels_pending_results_rejects_submissions_and_is_repeatable() {
     let shard = shard::Shard::try_new("cancel", Duration::from_millis(20)).unwrap();
-    let object = shard.bind(|bind| bind(Object::new()).as_handle());
+    let state = shard.bind(|bind| bind(TestState::new()).as_handle());
     let pending = shard
         .handle()
-        .try_deferred_invoke(object, async |_| std::future::pending::<()>().await);
+        .try_deferred_invoke(state, async |_| std::future::pending::<()>().await);
     shard.join().unwrap();
     shard.join().unwrap();
     assert_eq!(block_on(pending), Err(InvokeError::Canceled));
     assert_eq!(shard.handle().try_invoke(|| {}), Err(InvokeError::Closed));
 }
 #[test]
-fn final_object_drop_occurs_on_owner_even_when_handle_drops_elsewhere() {
+fn final_value_drop_occurs_on_owner_even_when_handle_drops_elsewhere() {
     let shard = shard::Shard::new("drop-owner");
     let (tx, rx) = mpsc::channel();
-    let object = shard.bind(move |bind| {
-        let mut object = Object::new();
-        object.dropped = Some(tx);
-        bind(object).as_handle()
+    let state = shard.bind(move |bind| {
+        let mut state = TestState::new();
+        state.dropped = Some(tx);
+        bind(state).as_handle()
     });
     let owner = block_on(
         shard
             .handle()
-            .try_deferred_invoke(object.clone(), async |_| std::thread::current().id()),
+            .try_deferred_invoke(state.clone(), async |_| std::thread::current().id()),
     )
     .unwrap();
-    let weak = object.downgrade();
-    std::thread::spawn(move || drop(object)).join().unwrap();
+    let weak = state.downgrade();
+    std::thread::spawn(move || drop(state)).join().unwrap();
     assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), owner);
     assert_eq!(
         block_on(shard.handle().try_deferred_invoke(weak, async |_| 1)),
-        Err(InvokeError::ObjectMissing)
+        Err(InvokeError::ValueMissing)
     );
     shard.join().unwrap();
 }
@@ -173,13 +173,13 @@ fn async_bind_and_join_from_external_tokio_runtime() {
         .unwrap();
     let shard = tokio::TokioShard::new("async-bind");
     rt.block_on(async {
-        let object = shard
-            .bind_async(|bind| bind(Object::new()).as_handle())
+        let state = shard
+            .bind_async(|bind| bind(TestState::new()).as_handle())
             .await
             .unwrap();
         let value = shard
             .handle()
-            .try_deferred_invoke(object, async |_| {
+            .try_deferred_invoke(state, async |_| {
                 ::tokio::time::sleep(Duration::from_millis(5)).await;
                 7
             })
@@ -203,11 +203,11 @@ fn local_loop_can_stop_without_a_main_result() {
 #[test]
 fn same_shard_nested_deferred_call_progresses() {
     let shard = shard::Shard::new("nested");
-    let object = shard.bind(|bind| bind(Object::new()).as_handle());
+    let state = shard.bind(|bind| bind(TestState::new()).as_handle());
     let handle = shard.handle();
-    let nested = object.clone();
+    let nested = state.clone();
     let outer = handle.clone();
-    let result = handle.try_deferred_invoke(object, async move |_| {
+    let result = handle.try_deferred_invoke(state, async move |_| {
         outer
             .try_deferred_invoke(nested, async |_| 19)
             .await
@@ -240,8 +240,8 @@ fn concurrent_joiners_wait_for_actual_completion() {
 #[test]
 fn deferred_future_outlives_the_submitting_handle() {
     let shard = shard::Shard::new("detached-receiver");
-    let object = shard.bind(|bind| bind(Object::new()).as_handle());
-    let result = shard.handle().deferred_invoke(object, async |_| 23);
+    let state = shard.bind(|bind| bind(TestState::new()).as_handle());
+    let result = shard.handle().deferred_invoke(state, async |_| 23);
     assert_eq!(block_on(result), 23);
     shard.join().unwrap();
 }
@@ -249,10 +249,10 @@ fn deferred_future_outlives_the_submitting_handle() {
 #[test]
 fn tracked_events_report_async_handler_completion_panic_and_cancellation() {
     let shard = shard::Shard::try_new("tracked-async", Duration::from_millis(20)).unwrap();
-    let object = shard.bind(|bind| bind(Object::new()).as_handle());
+    let state = shard.bind(|bind| bind(TestState::new()).as_handle());
     let event = Event::<usize>::default();
     let handle = shard.handle();
-    let target = object.clone();
+    let target = state.clone();
     event.add_tracked_connection(
         |_| {},
         move |n| {
@@ -267,14 +267,14 @@ fn tracked_events_report_async_handler_completion_panic_and_cancellation() {
         block_on(
             shard
                 .handle()
-                .try_deferred_invoke(object.clone(), async |o| *o.value.borrow())
+                .try_deferred_invoke(state.clone(), async |o| *o.value.borrow())
         ),
         Ok(42)
     );
 
     let panic_event = Event::<()>::default();
     let handle = shard.handle();
-    let target = object.clone();
+    let target = state.clone();
     panic_event.add_tracked_connection(
         |_| {},
         move |_| handle.try_deferred_invoke(target.clone(), async |_| panic!("expected panic")),
@@ -289,7 +289,7 @@ fn tracked_events_report_async_handler_completion_panic_and_cancellation() {
     pending_event.add_tracked_connection(
         |_| {},
         move |_| {
-            handle.try_deferred_invoke(object.clone(), async |_| std::future::pending::<()>().await)
+            handle.try_deferred_invoke(state.clone(), async |_| std::future::pending::<()>().await)
         },
     );
     let delivery = pending_event.emit_tracked(());

@@ -113,7 +113,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
 
             impl #signal_name {
-                pub fn connect<T, S>(&self, target: &S)
+                pub fn connect<T, S>(&self, target: &S) -> ::eventful_rs::Connection<(#(#arg_types,)*)>
                 where
                     T: ::eventful_rs::Eventful
                             + ::eventful_rs::HasEvents<T::EventSetType>
@@ -133,7 +133,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         tracked_handle.try_deferred_upgrade_in_shard(async move |#target_ident| {
                             #target_ident.#method_name(#(#arg_names),*);
                         })
-                    });
+                    })
                 }
 
                 pub fn emit(&self, #(#arg_names: #arg_types),*)
@@ -220,9 +220,9 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Generate handle wrappers for annotated methods in an inherent `impl`.
 ///
 /// Mark methods with `#[asynced]` to await their results, or `#[action]` to queue
-/// work from synchronous or async code without waiting. Original object methods
-/// keep their signatures. Unannotated methods remain accessible through local
-/// object references, including inside `upgrade_in_shard` callbacks.
+/// work from synchronous or async code without waiting. Original methods
+/// keep their signatures. Unannotated methods remain accessible through references to shard-local
+/// values, including inside `upgrade_in_shard` callbacks.
 /// Dispatched methods require `&self` and `Send + 'static` arguments and results.
 #[proc_macro_attribute]
 pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -441,10 +441,10 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }.into()
 }
 
-/// Add an `events` field and the object traits needed for shard binding.
+/// Add an `events` field and trait implementations needed for shard binding.
 ///
-/// Pass an event interface, as in `#[eventful(ProducerEvents)]`, to let the object
-/// emit those events. The shard declaration in scope supplies its default shard.
+/// Pass an event interface, as in `#[eventful(ProducerEvents)]`, to let instances
+/// of the annotated struct emit those events. The shard declaration in scope supplies its default shard.
 /// Initialize the generated field with `events: Default::default()`.
 #[proc_macro_attribute]
 pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -564,7 +564,7 @@ pub fn action(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Mark a method in an `#[asynchronize]` impl for an async handle wrapper.
 ///
 /// The original method may be synchronous or async. Polling the handle wrapper
-/// queues the call on the object's shard; awaiting it returns the method's result.
+/// queues the call on the value's shard; awaiting it returns the method's result.
 /// This does not wait for untracked events emitted by the method. Await tracked
 /// emissions inside the method when listener completion is part of its work.
 #[proc_macro_attribute]
@@ -574,9 +574,9 @@ pub fn asynced(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Run an async main function on a main-thread shard and join background shards.
 ///
-/// Supplies the default main-thread shard for objects declared in its scope.
+/// Supplies the default main-thread shard for values declared in its scope.
 /// The shard continues processing callbacks while the main future awaits work,
-/// allowing background objects to deliver events to main-thread listeners.
+/// allowing background producers to deliver events to main-thread listeners.
 /// Use `#[sharded_main(tokio)]` for Tokio timers and I/O; the default uses
 /// executor-independent futures. The main function's return type is preserved.
 #[proc_macro_attribute]

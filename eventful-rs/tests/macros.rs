@@ -38,7 +38,7 @@ impl declarations::Updates for Counter {
     }
 }
 #[test]
-fn generated_dispatch_supports_non_send_objects_and_cross_object_events() {
+fn generated_dispatch_supports_non_send_values_and_events_between_shards() {
     let counter = WORKER.bind(|bind| {
         bind(Counter {
             value: RefCell::new(0),

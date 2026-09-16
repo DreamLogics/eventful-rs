@@ -1,23 +1,23 @@
 # eventful-rs
 
 Is your Rust code too boring? Want to spice up your async cravings? Then let's make
-things a little more eventful! Add some events to your objects, connect that spaghetti
+things a little more eventful! Add some events to your structs, connect that spaghetti
 and let the magic happen. (or make it explode, whatever works for you)
 
 This crate provides an event and async dispatch system for Rust, focused mostly on
 ergonomics rather than performance. (no, that doesn't mean performance is going to be shit)
 It is intended for applications that need a simple, safe, and flexible way to handle
-events and asynchronous method calls on objects that might not live on the same thread.
+events and asynchronous method calls on values that might not live on the same thread.
 
-In concept, you have your stuff living on these little islands called shards. Each shard has it's
-own thread and event loop. You can create objects on a shard, and then call methods on those objects
+In concept, you have your stuff living on these little islands called shards. Each shard has its
+own thread and event loop. You can create values on a shard, and then call methods on those values
 from other shards. The calls are queued and executed on the shard's thread, and you can await the
-result of the call if you want. You can also connect events from one object to another, and when
-an event is emitted, all connected objects will receive the event on their own shard's thread.
+result of the call if you want. You can also connect events from a producer to a listener, and when
+an event is emitted, all connected listeners will receive the event on their own shard's thread.
 
-An object can use `Rc`, `Cell`, or `RefCell` internally. Other threads communicate
-through a `ShardRcHandle<T>`; they never receive a reference to the object itself.
-A shard owns the queue, object store, and futures for its objects.
+A value can use `Rc`, `Cell`, or `RefCell` internally. Other threads communicate
+through a `ShardRcHandle<T>`; they never receive a reference to the value itself.
+A shard owns the queue, value store, and futures for its values.
 
 This is an early `0.1` API. It supports a standard thread executor, Tokio runtimes,
 and an optional Slint UI adapter. It is not a distributed actor system (yet?).
@@ -166,7 +166,7 @@ impl producer::ProducerEvents for ProductionReporter {
 async fn main() {
     use producer::*;
 
-    // create our objects
+    // create the producer and reporter
     let producer = Producer::new();
     let reporter = ProductionReporter::new();
 
@@ -185,8 +185,8 @@ async fn main() {
     let produced_tracked = producer.produce_tracked(12).await;
     println!("Produced items tracked: {:?}", produced_tracked);
 
-    // we can also turn our handle back into a reference to the object
-    // the closure will run on the shard/thread this handle's object lives in
+    // borrow the producer through its handle
+    // the closure runs on the producer's shard thread
     producer.upgrade_in_shard(|producer| {
         // this will run on the producer shard/thread
         println!("Report: {}", producer.internal_report());
@@ -227,19 +227,19 @@ async fn main() {
 
 ### What to use when
 
-- **Choose where objects live.** `shard_std!(PRODUCER)` supplies the producer
+- **Choose where values live.** `shard_std!(PRODUCER)` supplies the producer
   module's default shard. `#[sharded_main]` supplies the main-thread default used
   by `ProductionReporter`. Their constructors return `ShardRcHandle<Self>` via
-  `.into()`, binding each object to its default shard. `#[eventful]` adds the
-  `events` field and object traits.
-- **Connect objects through events.** `#[events]` defines `ProducerEvents`;
+  `.into()`, binding each value to its default shard. `#[eventful]` adds the
+  `events` field and trait implementations for shard binding.
+- **Connect producers to listeners.** `#[events]` defines `ProducerEvents`;
   `#[eventful(ProducerEvents)]` lets `Producer` emit them. Implementing that trait
   on `ProductionReporter` supplies the callbacks. `connect(&reporter)` arranges
   for those callbacks to run on the reporter's shard.
 - **Await a method result.** `#[asynchronize]` generates handle methods for the
   annotated `impl`. `#[asynced]` makes the handle wrapper async, even for an
   ordinary method such as `produce` or `get_count`. The original method runs on
-  the object's shard, and awaiting the wrapper returns its result.
+  the value's shard, and awaiting the wrapper returns its result.
 - **Wait for event listeners too.** Awaiting `produce` only waits for the producer
   method; its untracked events may still be pending. `produce_tracked` awaits
   `join_all` over the tracked emissions, so every delivery has completed or
@@ -248,16 +248,16 @@ async fn main() {
 - **Queue work from synchronous code.** `#[action]` generates a normal handle
   method that queues work and returns immediately. `reset_count()` needs no
   `.await` or async caller; returning from it does not mean the reset has run.
-- **Call ordinary methods on the object.** `internal_report` has no generated
+- **Call ordinary methods on the producer.** `internal_report` has no generated
   handle wrapper. `upgrade_in_shard` queues a closure that receives `&Producer`
   on the producer's shard, where it can call that method directly. The reference
   stays inside the callback; it is not returned to the calling thread.
-- **Work with several objects together.** `producer.join(&another_producer)`
+- **Work with several values together.** `producer.join(&another_producer)`
   checks that both handles share a shard. The resulting group upgrades them in
   one callback, as a tuple of references, while keeping the original handles
   usable.
 
-The dispatch arguments and results must be `Send + 'static`; the objects
+The dispatch arguments and results must be `Send + 'static`; shard-local values
 can use `Cell`, `RefCell`, and `Rc` internally. The example's `Cell<usize>` is
 `Send`, so its constructor can use `.into()`. For non-`Send` values such as `Rc`,
 construct inside a `bind` factory and return `.as_handle()`. See
@@ -280,12 +280,12 @@ if let Some(joined) = foo.join(&bar) {
 
 Joins borrow their inputs and clone the handles only when their shard IDs match.
 The returned group owns its handles. Chain `.join(&baz)` to extend the flat tuple
-to as many as eight handles. Objects can have different types, and the same handle
+to as many as eight handles. Values can have different types, and the same handle
 can appear more than once.
 
 Joined handles also provide `upgrade_in_shard_async`, `deferred_upgrade_in_shard`,
 and `try_deferred_upgrade_in_shard`, with callbacks taking a tuple of references.
-All objects are resolved in one job on their shared shard and kept alive for the
+All values are resolved in one job on their shared shard and kept alive for the
 callback. Async callbacks can interleave with other jobs while suspended.
 
 Joining checks shard identity, not whether the shard is running. Like single
@@ -296,10 +296,10 @@ handle upgrades, fire-and-forget callbacks are skipped after shutdown; the
 ## Typed events
 
 Declare an event interface with `#[events]`, attach it to a source with
-`#[eventful(InterfaceName)]`, and implement the interface on a destination object.
+`#[eventful(InterfaceName)]`, and implement the interface for a listener type.
 The generated `source.event_name().connect(&target)` queues delivery on the
 destination's shard. Arguments must be owned, `Clone + Send + 'static` values.
-Interfaces need not be `Send` or `Sync`; their objects remain thread-affine.
+Interfaces need not be `Send` or `Sync`; listener values remain thread-affine.
 
 ```rust
 use eventful_rs::*;
@@ -326,11 +326,11 @@ fn main() {
 }
 ```
 
-Inside a source object, call `self.emit_message(text)`. Event traits in another
+Inside a method on the source type, call `self.emit_message(text)`. Event traits in another
 module expose `MessagesSignalsExt` and `MessagesEmittersExt`; import these extension
 traits where their methods are used.
 
-Connections use weak targets. They do not keep destination objects or event sets
+Connections use weak targets. They do not keep listeners or event sets
 alive. Deliveries to missing or stopped targets are ignored. Connections remain in
 the source's connection list until that source event set is dropped; there is not
 yet a disconnect API.
@@ -367,18 +367,18 @@ async methods do. Awaiting them waits for the method's result, including any
 tracked emissions it explicitly awaits; it does not track ordinary emissions.
 
 Unannotated methods, such as `internal_report` in the example, remain ordinary
-object methods. Use `upgrade_in_shard` to call them in a queued callback with a
-local object reference. That helper also works from synchronous code and returns
-without waiting. Use `deferred_upgrade_in_shard` when the callback needs to return
+methods on shard-local values. Use `upgrade_in_shard` to call them in a queued
+callback with a reference to the value. That helper also works from synchronous
+code and returns without waiting. Use `deferred_upgrade_in_shard` when the callback needs to return
 a result to the caller.
 
 For explicit errors rather than a panic on cancellation, use
-`handle.try_deferred_invoke(object_handle, async |object| { /* result */ })`.
+`handle.try_deferred_invoke(value_handle, async |value| { /* result */ })`.
 It submits immediately and returns a future yielding `Result<R, InvokeError>`.
-Errors distinguish closed shards, wrong-shard handles, missing objects, callback
+Errors distinguish closed shards, wrong-shard handles, missing values, callback
 panics, and cancellation. Dropping the receiver does not cancel accepted work.
 
-The legacy object-handle helpers and generated `#[asynced]` methods still return
+The legacy handle helpers and generated `#[asynced]` methods still return
 `R`, so they panic if no result can be delivered. `try_invoke*` and `try_spawn`
 report admission errors. Targeted fire-and-forget helpers ignore unavailable
 targets; use the fallible methods when that distinction matters.
@@ -395,7 +395,7 @@ targets; use the fallible methods when that distinction matters.
 
 All backends use the same thread-safe handle implementation and common queue.
 Backend handle names remain available as aliases. A runtime shard ID check prevents
-using an object's ID against a different shard's store.
+using a value's ID against a different shard's store.
 
 `#[sharded_main] async fn main()` declares and drives a standard main-thread shard,
 then joins background shards. `#[sharded_main(tokio)]` selects the Tokio variant.
@@ -424,7 +424,7 @@ Never synchronously wait for work that needs the thread you are blocking.
 
 The convenience `let handle: ShardRcHandle<T> = value.into()` is available when
 `T: Send` and has a default shard. It may block across threads. Use an explicit
-factory with `bind_async` from Tokio, and with `bind` for non-`Send` object creation.
+factory with `bind_async` from Tokio, and with `bind` for non-`Send` value creation.
 This avoids constructing runtime-dependent resources on the wrong thread.
 
 ## Ordering, ownership, and shutdown
@@ -434,8 +434,8 @@ This avoids constructing runtime-dependent resources on the wrong thread.
   complete out of order after yielding. Await results to express dependencies.
 - Do not hold a `RefCell` borrow across an await if another operation can borrow
   that cell. Thread affinity prevents cross-thread access, not async reentrancy.
-- Object handles keep objects alive while the shard is active. Weak handles do
-  not. Garbage collection checks idle stores periodically and retires objects
+- Strong handles keep values alive while the shard is active. Weak handles do
+  not. Garbage collection checks idle stores periodically and retires values
   outside the store borrow so destructors can safely reenter during collection.
 - The queue is unbounded and has no backpressure. Producers must bound their own
   outstanding work. This is unsuitable for unrestricted untrusted submissions.
@@ -449,7 +449,7 @@ This avoids constructing runtime-dependent resources on the wrong thread.
 - Child tasks launched directly with Tokio or Slint APIs are outside the shard's
   accounting. Await them or submit through the shard handle if they must drain.
   Tokio blocking-pool jobs can also delay runtime destruction.
-- Caught unwinding panics preserve the loop but do not roll back object mutations.
+- Caught unwinding panics preserve the loop but do not roll back value mutations.
   Abort-on-panic builds and panicking destructors cannot provide this isolation.
 - Static shards are not dropped at process exit. Join them explicitly, or use
   `join_all_shards()` after producers finish. From an external Tokio runtime use
@@ -457,7 +457,7 @@ This avoids constructing runtime-dependent resources on the wrong thread.
   quiescence protocol: finish cross-shard workflows before shutting them down.
 
 The crate forbids unsafe code. `ShardRc<T>` stays non-`Send` and non-`Sync`; moving
-the safe handle never moves its `Rc<T>` or object store. A weak handle's `events`
+the safe handle never moves its `Rc<T>` or value store. A weak handle's `events`
 field is a `Weak` pointer, not an owning `Arc`.
 
 ## Examples and development

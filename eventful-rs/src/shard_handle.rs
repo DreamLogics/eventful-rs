@@ -14,18 +14,18 @@ where
     fn shard_id(&self) -> crate::ShardId;
 }
 
-/// Dispatch work to an object's shard through a thread-safe handle.
+/// Dispatch work to a value's shard through a thread-safe handle.
 ///
-/// The callbacks receive local references on the object's owner thread. They can
-/// call ordinary object methods that have no generated handle wrapper.
+/// The callbacks receive local references on the value's owner thread. They can
+/// call ordinary methods that have no generated handle wrapper.
 #[allow(async_fn_in_trait)]
 pub trait ShardHandle<T>: ShardHandleInternal<T> + Clone + Send + Sync + 'static
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
-    /// Queue a callback with a local object reference and return without waiting.
+    /// Queue a callback with a reference to a shard-local value and return without waiting.
     ///
-    /// Usable from synchronous code. The reference stays on the object's shard;
+    /// Usable from synchronous code. The reference stays on the value's shard;
     /// a missing target or stopped built-in shard silently skips the callback.
     fn upgrade_in_shard<F>(&self, task: F)
     where
@@ -38,7 +38,7 @@ where
     where
         F: AsyncFnOnce(&T) -> () + Send + 'static;
 
-    /// Await a callback's result while it runs on the object's shard.
+    /// Await a callback's result while it runs on the value's shard.
     ///
     /// Submission starts when this future is polled. The built-in backend panics
     /// if the result cannot be delivered. Untracked events emitted by the callback
@@ -303,26 +303,26 @@ pub struct ShardRcId {
 }
 
 pub struct ShardRcStore {
-    objects: HashMap<usize, (Rc<dyn Any>, ShardRcId)>,
+    values: HashMap<usize, (Rc<dyn Any>, ShardRcId)>,
     last_id: usize,
 }
 
 impl ShardRcStore {
     pub fn new() -> Self {
         Self {
-            objects: HashMap::new(),
+            values: HashMap::new(),
             last_id: 0,
         }
     }
 
-    pub fn insert<T>(&mut self, object: Rc<T>) -> ShardRcId
+    pub fn insert<T>(&mut self, value: Rc<T>) -> ShardRcId
     where
         T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
     {
         self.last_id += 1;
         let id = self.last_id;
         let sid = ShardRcId { id: Arc::new(id) };
-        self.objects.insert(id, (object, sid.clone()));
+        self.values.insert(id, (value, sid.clone()));
         sid
     }
 
@@ -330,21 +330,21 @@ impl ShardRcStore {
     where
         T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
     {
-        self.objects
+        self.values
             .get(&id)
-            .and_then(|(obj, _)| obj.clone().downcast::<T>().ok())
+            .and_then(|(value, _)| value.clone().downcast::<T>().ok())
     }
 
     pub fn remove(&mut self, id: usize) {
-        self.objects.remove(&id);
+        self.values.remove(&id);
     }
 
     pub(crate) fn take_garbage(&mut self) -> Vec<Rc<dyn Any>> {
         let ids_to_remove: Vec<usize> = self
-            .objects
+            .values
             .iter()
-            .filter_map(|(&id, (obj, sid))| {
-                if Arc::strong_count(&sid.id) == 1 && Rc::strong_count(obj) == 1 {
+            .filter_map(|(&id, (value, sid))| {
+                if Arc::strong_count(&sid.id) == 1 && Rc::strong_count(value) == 1 {
                     Some(id)
                 } else {
                     None
@@ -354,7 +354,7 @@ impl ShardRcStore {
 
         ids_to_remove
             .into_iter()
-            .filter_map(|id| self.objects.remove(&id).map(|(obj, _)| obj))
+            .filter_map(|id| self.values.remove(&id).map(|(value, _)| value))
             .collect()
     }
 }

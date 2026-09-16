@@ -112,7 +112,7 @@ impl producer::ProducerEvents for ProductionReporter {
 async fn main() {
     use producer::*;
 
-    // create our objects
+    // create the producer and reporter
     let producer = Producer::new();
     let reporter = ProductionReporter::new();
 
@@ -131,8 +131,8 @@ async fn main() {
     let produced_tracked = producer.produce_tracked(12).await;
     println!("Produced items tracked: {:?}", produced_tracked);
 
-    // we can also turn our handle back into a reference to the object
-    // the closure will run on the shard/thread this handle's object lives in
+    // borrow the producer through its handle
+    // the closure runs on the producer's shard thread
     producer.upgrade_in_shard(|producer| {
         // this will run on the producer shard/thread
         println!("Report: {}", producer.internal_report());

@@ -61,7 +61,8 @@ impl Drop for ContextGuard {
 pub enum InvokeError {
     Closed,
     WrongShard,
-    ObjectMissing,
+    /// The target value no longer exists in its shard's store.
+    ValueMissing,
     Panicked,
     Canceled,
 }
@@ -70,7 +71,7 @@ impl fmt::Display for InvokeError {
         f.write_str(match self {
             Self::Closed => "shard is stopping or stopped",
             Self::WrongShard => "handle belongs to another shard",
-            Self::ObjectMissing => "target object no longer exists",
+            Self::ValueMissing => "target value no longer exists",
             Self::Panicked => "callback panicked",
             Self::Canceled => "invocation canceled before returning a result",
         })
@@ -79,7 +80,7 @@ impl fmt::Display for InvokeError {
 impl std::error::Error for InvokeError {}
 
 /// Thread-safe submission handle shared by the runtime backends.
-/// Only closures and object IDs cross threads; shard objects and their futures do not.
+/// Only closures and value IDs cross threads; shard values and their futures do not.
 #[derive(Clone)]
 pub struct ShardEventHandle {
     pub(crate) shard_id: ShardId,
@@ -173,9 +174,9 @@ impl ShardEventHandle {
         }
         self.post(Box::new(move |store| {
             Box::pin(async move {
-                let obj = { store.borrow().get::<T>(handle.id()) };
-                if let Some(obj) = obj {
-                    f(&obj);
+                let value = { store.borrow().get::<T>(handle.id()) };
+                if let Some(value) = value {
+                    f(&value);
                 }
             })
         }))
@@ -191,9 +192,9 @@ impl ShardEventHandle {
         }
         self.post(Box::new(move |store| {
             Box::pin(async move {
-                let obj = { store.borrow().get::<T>(handle.id()) };
-                if let Some(obj) = obj {
-                    f(&obj).await;
+                let value = { store.borrow().get::<T>(handle.id()) };
+                if let Some(value) = value {
+                    f(&value).await;
                 }
             })
         }))
@@ -218,10 +219,10 @@ impl ShardEventHandle {
             self.post(Box::new(move |store| {
                 Box::pin(async move {
                     let result = AssertUnwindSafe(async move {
-                        let obj = { store.borrow().get::<T>(handle.id()) };
-                        match obj {
-                            Some(obj) => Ok(f(&obj).await),
-                            None => Err(InvokeError::ObjectMissing),
+                        let value = { store.borrow().get::<T>(handle.id()) };
+                        match value {
+                            Some(value) => Ok(f(&value).await),
+                            None => Err(InvokeError::ValueMissing),
                         }
                     })
                     .catch_unwind()
@@ -236,7 +237,7 @@ impl ShardEventHandle {
             rx.await.map_err(|_| InvokeError::Canceled)?
         }
     }
-    /// Create an object on its owner thread; usable from any executor.
+    /// Create a value on its owner thread; usable from any executor.
     pub fn bind_async<F, R, T>(
         &self,
         f: F,
@@ -392,7 +393,7 @@ fn guarded(future: LocalFuture) -> LocalFuture {
     })
 }
 
-/// Remove first, then drop outside the RefCell borrow: destructors may bind objects.
+/// Remove first, then drop outside the RefCell borrow: destructors may bind values.
 fn collect(store: &RefCell<ShardRcStore>) {
     let retired = store.borrow_mut().take_garbage();
     drop(retired);

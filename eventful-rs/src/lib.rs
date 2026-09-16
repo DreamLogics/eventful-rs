@@ -11,6 +11,8 @@ pub type DeliveryError = InvokeError;
 
 mod shard_handle;
 pub use shard_handle::*;
+mod connection;
+pub use connection::*;
 
 pub mod local;
 
@@ -235,7 +237,7 @@ where
 pub trait EventLoop {
     type HandleType: EventLoopHandle;
     fn handle(&self) -> Self::HandleType;
-    /// Spawn objects bound to this event loop.
+    /// Spawn values bound to this event loop.
     fn bind<F, R, T>(&self, f: F) -> R
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
@@ -259,20 +261,37 @@ type TrackedTaskFn<Args> = dyn Fn(Args) -> futures::future::BoxFuture<'static, R
     + Sync
     + 'static;
 
-struct Connection<Args> {
+struct EventConnectionRecord<Args> {
+    id: usize,
     emit: Arc<TaskFn<Args>>,
     tracked: Arc<TrackedTaskFn<Args>>,
 }
 
+struct EventInternal<Args> {
+    connections: Mutex<Vec<Arc<EventConnectionRecord<Args>>>>,
+    last_id: Mutex<usize>,
+}
+
 /// Type-erased connection storage for one signal signature.
 pub struct Event<Args> {
-    connections: Mutex<Vec<Arc<Connection<Args>>>>,
+    internal: Arc<EventInternal<Args>>,
+}
+
+impl<Args> Clone for Event<Args> {
+    fn clone(&self) -> Self {
+        Self {
+            internal: self.internal.clone(),
+        }
+    }
 }
 
 impl<Args> Default for Event<Args> {
     fn default() -> Self {
         Self {
-            connections: Mutex::new(Vec::new()),
+            internal: Arc::new(EventInternal {
+                connections: Mutex::new(Vec::new()),
+                last_id: Mutex::new(0),
+            }),
         }
     }
 }
@@ -281,7 +300,7 @@ impl<Args> Event<Args>
 where
     Args: Clone + Send + 'static,
 {
-    pub fn add_connection<F>(&self, connection: F)
+    pub fn add_connection<F>(&self, connection: F) -> Connection<Args>
     where
         F: Fn(Args) + Send + Sync + 'static,
     {
@@ -293,26 +312,35 @@ where
                 connection(args);
                 std::future::ready(Ok(()))
             },
-        );
+        )
     }
 
     /// Register ordinary dispatch and tracked dispatch for the same connection.
     /// Tracked dispatch must submit work immediately; its returned future observes
     /// completion. Dropping that future should not cancel the submitted work.
-    pub fn add_tracked_connection<F, G, Fut>(&self, emit: F, tracked: G)
+    pub fn add_tracked_connection<F, G, Fut>(&self, emit: F, tracked: G) -> Connection<Args>
     where
         F: Fn(Args) + Send + Sync + 'static,
         G: Fn(Args) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<(), DeliveryError>> + Send + 'static,
     {
-        self.connections.lock().unwrap().push(Arc::new(Connection {
-            emit: Arc::new(emit),
-            tracked: Arc::new(move |args| Box::pin(tracked(args))),
-        }));
+        let mut last_id = self.internal.last_id.lock().unwrap();
+        let id = *last_id;
+        *last_id += 1;
+        self.internal
+            .connections
+            .lock()
+            .unwrap()
+            .push(Arc::new(EventConnectionRecord {
+                id,
+                emit: Arc::new(emit),
+                tracked: Arc::new(move |args| Box::pin(tracked(args))),
+            }));
+        Connection::new(id, self.internal.clone())
     }
 
     pub fn emit(&self, args: Args) {
-        let snapshot = self.connections.lock().unwrap().clone();
+        let snapshot = self.internal.connections.lock().unwrap().clone();
         for connection in snapshot {
             (connection.emit)(args.clone());
         }
@@ -331,7 +359,7 @@ where
         use futures::FutureExt;
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
-        let snapshot = self.connections.lock().unwrap().clone();
+        let snapshot = self.internal.connections.lock().unwrap().clone();
         let mut deliveries = Vec::with_capacity(snapshot.len());
         for connection in snapshot {
             let delivery = catch_unwind(AssertUnwindSafe(|| (connection.tracked)(args.clone())));
@@ -354,7 +382,7 @@ where
     }
 
     pub fn connection_count(&self) -> usize {
-        self.connections.lock().unwrap().len()
+        self.internal.connections.lock().unwrap().len()
     }
 }
 
