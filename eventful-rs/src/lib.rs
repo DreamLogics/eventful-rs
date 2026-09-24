@@ -18,6 +18,8 @@ pub mod local;
 
 pub mod shard;
 
+pub mod task;
+
 //pub mod rv;
 
 #[cfg(feature = "tokio")]

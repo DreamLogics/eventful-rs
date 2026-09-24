@@ -378,6 +378,26 @@ where
     }
 }
 
+impl<T> From<T> for ShardRc<T>
+where
+    T: Eventful<EventLoopHandleType = crate::ShardEventHandle>
+        + HasEvents<T::EventSetType>
+        + Send
+        + 'static,
+{
+    fn from(value: T) -> Self {
+        let handle = T::default_handle();
+        if crate::engine::has_context(handle.shard_id) {
+            crate::engine::bind_here(&crate::engine::store(handle.shard_id), handle, |bind| {
+                bind(value)
+            })
+        } else {
+            // invalid
+            panic!("???");
+        }
+    }
+}
+
 impl<T> From<T> for ShardRcHandle<T>
 where
     T: Eventful<EventLoopHandleType = crate::ShardEventHandle>

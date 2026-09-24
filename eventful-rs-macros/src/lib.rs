@@ -3,7 +3,8 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    FnArg, ItemImpl, ItemStruct, ItemTrait, Pat, TraitItem, Type, parse_macro_input, parse_quote,
+    FnArg, ItemImpl, ItemStruct, ItemTrait, Pat, Safety, TraitItem, Type, parse_macro_input,
+    parse_quote,
 };
 
 /// Define a typed event interface with synchronous `&self` methods.
@@ -13,7 +14,12 @@ use syn::{
 /// each listener's shard. Ordinary emissions do not wait for listeners; tracked
 /// emissions return a future that observes completion and delivery errors.
 #[proc_macro_attribute]
-pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let event_trait: Option<syn::Path> = if attr.is_empty() {
+        None
+    } else {
+        Some(parse_macro_input!(attr as syn::Path))
+    };
     let trait_item = parse_macro_input!(item as ItemTrait);
     if !trait_item.generics.params.is_empty() {
         return syn::Error::new_spanned(
@@ -32,7 +38,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let sig = &method.sig;
         if sig.asyncness.is_some()
             || !sig.generics.params.is_empty()
-            || !matches!(sig.receiver(), Some(r) if r.reference.is_some() && r.mutability.is_none())
+            || !matches!(sig.receiver(), Some(r) if matches!(r.kind, syn::ReceiverKind::Reference(_, _, None)))
             || !matches!(&sig.output, syn::ReturnType::Default)
         {
             return syn::Error::new_spanned(
@@ -101,6 +107,25 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let target_ident = fresh_target(arg_names);
         let emit_tracked_name = format_ident!("emit_{}_tracked", method_name);
         let emit_name = format_ident!("emit_{}", method_name);
+
+        let trait_bound = if let Some(event_trait) = &event_trait {
+            quote! {
+                ::eventful_rs::Eventful
+                        + ::eventful_rs::HasEvents<T::EventSetType>
+                        + #trait_name
+                        + #event_trait
+                        + Sized
+                        + 'static
+            }
+        } else {
+            quote! {
+                ::eventful_rs::Eventful
+                        + ::eventful_rs::HasEvents<T::EventSetType>
+                        + #trait_name
+                        + Sized
+                        + 'static
+            }
+        };
         signal_defs.push(quote! {
             pub struct #signal_name {
                 inner: ::eventful_rs::Event<(#(#arg_types,)*)>,
@@ -115,11 +140,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
             impl #signal_name {
                 pub fn connect<T, S>(&self, target: &S) -> ::eventful_rs::Connection<(#(#arg_types,)*)>
                 where
-                    T: ::eventful_rs::Eventful
-                            + ::eventful_rs::HasEvents<T::EventSetType>
-                            + #trait_name
-                            + Sized
-                            + 'static,
+                    T: #trait_bound,
                     S: ::eventful_rs::Sharded<T>,
                     #(#arg_types: Clone + Send + 'static,)*
                 {
@@ -132,6 +153,34 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     }, move |(#(#arg_names,)*)| {
                         tracked_handle.try_deferred_upgrade_in_shard(async move |#target_ident| {
                             #target_ident.#method_name(#(#arg_names),*);
+                        })
+                    })
+                }
+
+                pub fn connect_filtered<T, S, F>(&self, target: &S, accept: F) -> ::eventful_rs::Connection<(#(#arg_types,)*)>
+                where
+                    T: #trait_bound,
+                    S: ::eventful_rs::Sharded<T>,
+                    F: Fn(&T) -> bool + Clone + Send + Sync + 'static,
+                    #(#arg_types: Clone + Send + 'static,)*
+                {
+                    let handle = ::eventful_rs::ShardHandle::downgrade(&::eventful_rs::Sharded::as_handle(target));
+                    let tracked_handle = handle.clone();
+                    let accept_a = accept.clone();
+                    let accept_b = accept;
+                    self.inner.add_tracked_connection(move |(#(#arg_names,)*)| {
+                        let accept = accept_a.clone();
+                        ::eventful_rs::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
+                            if accept(#target_ident) {
+                                #target_ident.#method_name(#(#arg_names),*);
+                            }
+                        });
+                    }, move |(#(#arg_names,)*)| {
+                        let accept = accept_b.clone();
+                        tracked_handle.try_deferred_upgrade_in_shard(async move |#target_ident| {
+                            if accept(#target_ident) {
+                                #target_ident.#method_name(#(#arg_names),*);
+                            }
                         })
                     })
                 }
@@ -152,6 +201,7 @@ pub fn events(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
         });
+
         set_fields.push(quote!(pub #method_name: #signal_name));
         extension_signal_methods.push(quote! {
             fn #method_name(&self) -> &#signal_name {
@@ -259,8 +309,8 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     .is_some_and(|s| s.ident == "action" || s.ident == "asynced")
             });
             if annotated
-                && (!matches!(method.sig.receiver(), Some(r) if r.reference.is_some() && r.mutability.is_none())
-                    || method.sig.unsafety.is_some()
+                && (!matches!(method.sig.receiver(), Some(r) if matches!(r.kind, syn::ReceiverKind::Reference(_, _, None)))
+                    || matches!(method.sig.safety, Safety::Unsafe(_))
                     || method.sig.constness.is_some())
             {
                 return syn::Error::new_spanned(
