@@ -5,6 +5,8 @@ use syn::{FnArg, ItemTrait, Pat, TraitItem, Type, parse_macro_input};
 
 use crate::{fresh_target, pascal};
 /// Define a typed event interface with synchronous `&self` methods.
+/// Generated signal-access and emitter extension traits inherit the interface
+/// visibility, so private interfaces can use private payload types.
 ///
 /// Concrete argument types such as `Vec<String>` and `Option<Vec<String>>` are
 /// supported. Traits and methods cannot declare generic parameters (`<T>`).
@@ -96,6 +98,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         labels.push(label);
     }
     let trait_name = &trait_item.ident;
+    let visibility = &trait_item.vis;
     let set_name = format_ident!("{}EventSet", trait_name);
     let ext_signals_name = format_ident!("{}SignalsExt", trait_name);
     let ext_emitter_name = format_ident!("{}EmittersExt", trait_name);
@@ -316,12 +319,12 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         /// Access individual signals through local values or remote handles.
-        pub trait #ext_signals_name: ::eventful_rs::HasEvents<#set_name> {
+        #visibility trait #ext_signals_name: ::eventful_rs::HasEvents<#set_name> {
             #(#extension_signal_methods)*
         }
 
         /// Emit ordinary or tracked events through shared signal storage.
-        pub trait #ext_emitter_name: ::eventful_rs::HasEvents<#set_name>{
+        #visibility trait #ext_emitter_name: ::eventful_rs::HasEvents<#set_name>{
             #(#extension_emitter_methods)*
         }
 

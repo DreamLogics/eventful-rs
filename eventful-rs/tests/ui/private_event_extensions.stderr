@@ -1,0 +1,25 @@
+error[E0603]: trait `UpdatesEmittersExt` is private
+  --> tests/ui/private_event_extensions.rs:15:16
+   |
+15 | use internal::{UpdatesEmittersExt, UpdatesSignalsExt};
+   |                ^^^^^^^^^^^^^^^^^^ private trait
+   |
+note: the trait `UpdatesEmittersExt` is defined here
+  --> tests/ui/private_event_extensions.rs:9:5
+   |
+ 9 |     #[events]
+   |     ^^^^^^^^^
+   = note: this error originates in the attribute macro `events` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0603]: trait `UpdatesSignalsExt` is private
+  --> tests/ui/private_event_extensions.rs:15:36
+   |
+15 | use internal::{UpdatesEmittersExt, UpdatesSignalsExt};
+   |                                    ^^^^^^^^^^^^^^^^^ private trait
+   |
+note: the trait `UpdatesSignalsExt` is defined here
+  --> tests/ui/private_event_extensions.rs:9:5
+   |
+ 9 |     #[events]
+   |     ^^^^^^^^^
+   = note: this error originates in the attribute macro `events` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve event-interface visibility on generated extension traits so private
+  payloads are not exposed through public tracked-emission interfaces.
+
 - Prevent connection removal from running captured destructors under the event
   mutex, avoiding deadlocks when destructors reenter the same signal.
 - Add a tested API guide, complete public/private doc comments, generated API

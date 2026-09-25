@@ -10,6 +10,8 @@ mod entry;
 mod events;
 
 /// Define a typed event interface with synchronous `&self` methods.
+/// Generated signal-access and emitter extension traits inherit the interface
+/// visibility, so private interfaces can use private payload types.
 ///
 /// Concrete argument types such as `Vec<String>` and `Option<Vec<String>>` are
 /// supported. Traits and methods cannot declare generic parameters (`<T>`).
