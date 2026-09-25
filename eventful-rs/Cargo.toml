@@ -22,7 +22,7 @@ eventful-rs-macros = { version = "0.1.0", path = "../eventful-rs-macros" }
 futures = "0.3"
 futures-timer = "3"
 tokio = { version = "1.48", features = ["sync", "rt", "time", "macros", "net"], optional = true }
-slint = { version = "1.17.1", default-features = false, features = ["std", "compat-1-2"], optional = true }
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2"], optional = true }
 
 [dev-dependencies]
 trybuild = "1"

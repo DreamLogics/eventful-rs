@@ -169,7 +169,7 @@ untracked emission propagates them.
 | `slint` | `slint::SlintShard`, application UI loop | `slint` |
 
 Disable default features for executor-independent futures only. Core and Tokio
-support Rust 1.85; Slint 1.17 requires Rust 1.92 or newer. An application must
+support Rust 1.85; Slint 1.18 requires Rust 1.92 or newer. An application must
 select its own Slint backend and renderer.
 
 Initialize main/UI markers on their owner thread before cross-thread access.

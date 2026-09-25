@@ -24,7 +24,7 @@ cargo +1.85.0 check -p eventful-rs --lib --locked
 cargo +1.85.0 check -p eventful-rs --lib --no-default-features --locked
 ```
 
-The MSRV applies to the core/default library. Slint 1.17 requires Rust 1.92+;
+The MSRV applies to the core/default library. Slint 1.18 requires Rust 1.92+;
 workspace examples and test dependencies are validated on stable Rust.
 
 ## Publish

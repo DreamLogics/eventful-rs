@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update the optional Slint backend to Slint 1.18 (locked to 1.18.1).
+
 - Preserve event-interface visibility on generated extension traits so private
   payloads are not exposed through public tracked-emission interfaces.
 
