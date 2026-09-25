@@ -1,5 +1,16 @@
 # Development and release
 
+On Debian/Ubuntu, install the native dependencies for the optional Slint backend
+before running the all-feature checks:
+
+```sh
+sudo apt-get update
+sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev
+```
+
+Slint's font discovery dependency uses `pkg-config` to locate `fontconfig.pc`.
+The core/default library and MSRV checks do not need these packages.
+
 Run `./scripts/check.sh` on stable Rust. It checks formatting, all example binaries,
 core/default/all-feature tests, public and private API documentation, Clippy,
 rustdoc links, and both packaged crates. Generated documentation is at
