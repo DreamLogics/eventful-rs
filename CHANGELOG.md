@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `connect(&listener)` to shard references and handles for subscribing to all
+  events, with `ConnectionGroup` disconnection and scoped cleanup. Weak sources
+  return `None` when their event set has expired.
+
 - Add `file_scope!(shard = Marker)` for file-level defaults without an inline
   module wrapper; per-type and enclosing scope selections take precedence.
 

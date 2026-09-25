@@ -53,3 +53,57 @@ impl<Args> Drop for ScopedConnection<Args> {
         connections.retain(|c| c.id != self.id);
     }
 }
+
+/// Connections for all signals of one event interface.
+/// Dropping the group keeps subscriptions active. Call disconnect() or use
+/// scoped() to disconnect every subscription. Targets remain weak.
+#[derive(Clone, Default)]
+pub struct ConnectionGroup {
+    disconnectors: Vec<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl ConnectionGroup {
+    /// Add an individual connection to the group.
+    pub fn push<Args: 'static>(&mut self, connection: Connection<Args>) {
+        self.disconnectors.push(Arc::new(move || {
+            let mut connections = connection.event.connections.lock().unwrap();
+            connections.retain(|c| c.id != connection.id);
+        }));
+    }
+
+    /// Disconnect every subscription. Already queued deliveries may still run.
+    /// Removal is per signal, not an atomic operation across the event interface.
+    pub fn disconnect(self) {
+        self.disconnect_all();
+    }
+
+    fn disconnect_all(&self) {
+        for disconnect in &self.disconnectors {
+            disconnect();
+        }
+    }
+
+    /// Disconnect the whole group when the returned guard is dropped.
+    pub fn scoped(self) -> ScopedConnectionGroup {
+        ScopedConnectionGroup(self)
+    }
+}
+
+/// A group that disconnects on drop. Dropping any clone disconnects the group,
+/// matching ScopedConnection semantics.
+#[derive(Clone)]
+pub struct ScopedConnectionGroup(ConnectionGroup);
+
+impl Drop for ScopedConnectionGroup {
+    fn drop(&mut self) {
+        self.0.disconnect_all();
+    }
+}
+
+/// Implemented by generated event sets for compatible listener types.
+pub trait ConnectEvents<T>
+where
+    T: crate::Eventful + crate::HasEvents<T::EventSetType> + 'static,
+{
+    fn connect_events<S: crate::Sharded<T>>(&self, target: &S) -> ConnectionGroup;
+}

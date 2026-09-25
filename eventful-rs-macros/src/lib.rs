@@ -244,6 +244,10 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
     }
 
+    let connect_methods = methods.iter().map(|(name, _, _, _)| name);
+    let connect_args = methods.iter().flat_map(|(_, _, _, types)| types);
+    let extra_bound = event_trait.as_ref().map(|path| quote!(+ #path));
+
     quote! {
         #trait_item
 
@@ -252,6 +256,21 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         #[derive(Default)]
         pub struct #set_name {
             #(#set_fields,)*
+        }
+
+        impl<T> ::eventful_rs::ConnectEvents<T> for #set_name
+        where
+            T: ::eventful_rs::Eventful + ::eventful_rs::HasEvents<T::EventSetType>
+                + #trait_name #extra_bound + 'static,
+            #(#connect_args: Clone + Send + 'static,)*
+        {
+            fn connect_events<S: ::eventful_rs::Sharded<T>>(&self, target: &S)
+                -> ::eventful_rs::ConnectionGroup
+            {
+                let mut group = ::eventful_rs::ConnectionGroup::default();
+                #(group.push(self.#connect_methods.connect(target));)*
+                group
+            }
         }
 
         pub trait #ext_signals_name: ::eventful_rs::HasEvents<#set_name> {
@@ -699,6 +718,17 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
             pub trait #trait_ident {}
 
             pub struct #trait_ident_set {}
+
+            impl<T> ::eventful_rs::ConnectEvents<T> for #trait_ident_set
+            where
+                T: ::eventful_rs::Eventful + ::eventful_rs::HasEvents<T::EventSetType> + 'static,
+            {
+                fn connect_events<S: ::eventful_rs::Sharded<T>>(&self, _target: &S)
+                    -> ::eventful_rs::ConnectionGroup
+                {
+                    ::eventful_rs::ConnectionGroup::default()
+                }
+            }
 
             impl Default for #trait_ident_set {
                 fn default() -> Self {

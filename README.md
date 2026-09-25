@@ -398,10 +398,34 @@ Inside a method on the source type, call `self.emit_message(text)`. Event traits
 module expose `MessagesSignalsExt` and `MessagesEmittersExt`; import these extension
 traits where their methods are used.
 
-Connections use weak targets. They do not keep listeners or event sets
-alive. Deliveries to missing or stopped targets are ignored. Connections remain in
-the source's connection list until that source event set is dropped; there is not
-yet a disconnect API.
+Connect an entire event interface with `source.connect(&listener)`. This is an
+inherent method on `ShardRc` and `ShardRcHandle`, so it needs no generated
+extension-trait import. The listener must implement every method of the source's
+event trait and any extra listener bound declared by `#[events(...)]`.
+
+```rust,ignore
+let connections = source.connect(&listener);
+// All signals now deliver to the listener on its owning shard.
+connections.disconnect();
+
+let guard = source.connect(&listener).scoped();
+// All these subscriptions disconnect when guard is dropped.
+```
+
+The returned `ConnectionGroup` supports `disconnect()`, `scoped()`, and cloning.
+Dropping a plain group keeps subscriptions active. Dropping any scoped clone
+disconnects its entire group, matching individual `Connection` behavior.
+Each call adds a new group; disconnecting one leaves other groups and individual
+subscriptions intact. Registration and removal operate per signal, not atomically
+across the interface. Already queued deliveries may still complete.
+Empty event sets produce a no-op group.
+
+`ShardWeakHandle::connect(&listener)` returns `Some(ConnectionGroup)` while the
+source event set exists, or `None` after it expires. Targets remain weak in all
+cases. Connections do not keep listener values or their event sets alive. Ordinary
+deliveries to missing or stopped targets are ignored. Individual signal connections
+also support `disconnect()` and `scoped()`. Connection tokens retain the relevant
+signal storage until the tokens are dropped.
 
 Use `source.message().emit_tracked(text).await` (or
 `self.emit_message_tracked(text).await`) to wait for handler completion. Dispatch

@@ -63,8 +63,8 @@ fn main() {
     let source = FooShard::shard().bind(|sharded| sharded(Foo::new("Sera".to_owned())).as_handle());
     let bar = BarShard::shard().bind(|sharded| sharded(bar::Bar::new()).as_handle());
 
-    source.on_hello().connect(&bar);
-    source.on_position().connect(&bar);
+    // Subscribe the listener to every event in FooEvents.
+    source.connect(&bar);
 
     source.upgrade_in_shard(|source| {
         for _ in 0..3 {

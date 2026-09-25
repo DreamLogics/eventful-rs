@@ -11,3 +11,7 @@ created by `file_scope!(shard = Marker);` in the current module. A missing
 
 `#[sharded_main(Main)]` drives an explicitly declared main-thread marker; declaration
 uses the runtime crate's `declare_shard!` macro. It does not select a scope default.
+
+`#[events]` also implements `ConnectEvents<Listener>` for its generated event set,
+enabling `source.connect(&listener)` on shard references and handles. Bulk connections
+use the same weak targets, delivery paths, and listener bounds as individual signals.

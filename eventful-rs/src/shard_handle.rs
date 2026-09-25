@@ -433,6 +433,57 @@ where
     }
 }
 
+impl<T> ShardRc<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Connect every event in this source's interface to a compatible listener.
+    /// Dropping the returned group keeps subscriptions active; use disconnect()
+    /// or scoped() to remove them. Registration is per signal, not atomic.
+    pub fn connect<U, S>(&self, target: &S) -> crate::ConnectionGroup
+    where
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
+        S: Sharded<U>,
+        T::EventSetType: crate::ConnectEvents<U>,
+    {
+        crate::ConnectEvents::connect_events(&*self.events, target)
+    }
+}
+
+impl<T> ShardRcHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Connect every event in this source's interface to a compatible listener.
+    /// Dropping the returned group keeps subscriptions active; use disconnect()
+    /// or scoped() to remove them. Registration is per signal, not atomic.
+    pub fn connect<U, S>(&self, target: &S) -> crate::ConnectionGroup
+    where
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
+        S: Sharded<U>,
+        T::EventSetType: crate::ConnectEvents<U>,
+    {
+        crate::ConnectEvents::connect_events(&*self.events, target)
+    }
+}
+
+impl<T> ShardWeakHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Connect all events if the source's event set still exists.
+    /// Returns None for an expired event set. Targets remain weak.
+    pub fn connect<U, S>(&self, target: &S) -> Option<crate::ConnectionGroup>
+    where
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
+        S: Sharded<U>,
+        T::EventSetType: crate::ConnectEvents<U>,
+    {
+        let events = self.events.upgrade()?;
+        Some(crate::ConnectEvents::connect_events(&*events, target))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
