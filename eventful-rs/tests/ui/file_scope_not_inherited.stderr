@@ -1,0 +1,11 @@
+error[E0425]: cannot find type `__EventfulFileShard` in module `self`
+ --> tests/ui/file_scope_not_inherited.rs:3:5
+  |
+3 |     #[eventful_rs::eventful]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^ not found in `self`
+  |
+  = note: this error originates in the attribute macro `eventful_rs::eventful` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider importing this type alias
+  |
+3 +     use crate::__EventfulFileShard;
+  |

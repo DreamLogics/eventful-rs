@@ -629,7 +629,8 @@ fn apply_scope(items: &mut [syn::Item], shard: &syn::Path) -> syn::Result<()> {
 ///
 /// Pass an event interface, as in `#[eventful(ProducerEvents)]`, to let instances
 /// of the annotated struct emit those events. Select its shard with `shard = Marker`
-/// or an enclosing `#[scope(shard = Marker)]` attribute.
+/// or an enclosing `#[scope(shard = Marker)]` attribute. Otherwise, the current
+/// module must declare `file_scope!(shard = Marker);`.
 /// Initialize the generated field with `events: Default::default()`.
 #[proc_macro_attribute]
 pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -688,11 +689,9 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
-    let Some(shard) = args.shard else {
-        return syn::Error::new_spanned(&item.ident,
-            "select a shard with #[eventful(shard = Marker)] or an enclosing #[scope(shard = Marker)]")
-            .to_compile_error().into();
-    };
+    let shard = args
+        .shard
+        .unwrap_or_else(|| parse_quote!(self::__EventfulFileShard));
 
     let gen_trait = if needs_to_gen_trait {
         let trait_ident_set = format_ident!("{}EventsEventSet", struct_name);

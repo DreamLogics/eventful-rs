@@ -284,11 +284,31 @@ mod models {
 }
 ```
 
+For a whole source file, put the selection at module level without a wrapper:
+
+```rust
+use eventful_rs::*;
+declare_shard!(pub Worker, runtime = std);
+file_scope!(shard = Worker);
+
+#[eventful]
+struct Counter;
+```
+
+`file_scope!` applies to the current module, including declarations before it.
+It can also select a marker from another module, such as `crate::Worker`.
+Explicit `#[eventful(shard = ...)]` and enclosing `#[scope]` selections take
+precedence. Declare it once per module. Child modules do not automatically
+inherit it. It creates the reserved alias `__EventfulFileShard`; normal Rust
+imports apply, so `use super::*` can import the default. A child's own
+`file_scope!` takes precedence over a glob import.
+
 `<models::Counter as Eventful>::Shard` is `Worker`; `View::Shard` is `Ui`.
 Scope paths resolve inside the annotated module, so use `super::Worker` for a
 marker declared in its parent. Selection extends to nested inline modules;
 per-type selections and nested `#[scope]` attributes override it. External module
-files must select their own shards. Types without a selection fail to compile.
+files must select their own shards. Types without a selection fail to compile (a missing `__EventfulFileShard` means
+that `file_scope!` or an explicit shard selection is needed).
 Scope only processes directly written struct/module items, not declarations
 emitted by another macro or hidden in `cfg_attr`.
 

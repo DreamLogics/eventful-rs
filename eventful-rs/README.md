@@ -12,7 +12,8 @@ main-thread shard. It demonstrates when to use each API:
 - `declare_shard!(pub Worker, runtime = std)` declares a marker and a lazy singleton.
   `#[scope(shard = super::Worker)]` selects it for an inline module; paths resolve
   inside that module. `#[eventful(shard = Worker)]` selects a shard for one type.
-  Explicit type selections and nested scopes override inherited selections.
+  For a whole file, use `file_scope!(shard = Worker);` without a module wrapper.
+  Explicit type selections and enclosing scopes override the file default.
 - `Eventful::Shard` records the destination in the type. `T::spawn(factory).await?`
   constructs a value there and returns `ShardRcHandle<T>`. The factory's captures
   must be `Send`; the value may contain `Rc` or other non-`Send` state.

@@ -1,13 +1,14 @@
 use eventful_rs::*;
 use std::cell::RefCell;
 declare_shard!(pub WebShard, runtime = tokio);
+file_scope!(shard = WebShard);
 
 #[events]
 pub trait WebClientEvents {
     fn on_response(&self, content: String);
 }
 
-#[eventful(WebClientEvents, shard = WebShard)]
+#[eventful(WebClientEvents)]
 pub struct WebClient {
     client: reqwest::Client,
     last_url: RefCell<Option<String>>,

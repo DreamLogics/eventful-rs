@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add `file_scope!(shard = Marker)` for file-level defaults without an inline
+  module wrapper; per-type and enclosing scope selections take precedence.
+
 - Add named shard markers with `declare_shard!`, explicit `#[scope]` selection,
   per-type overrides, and inferred `Eventful::spawn` factory construction.
 - Enforce named affinity during binding; retain runtime-selected values through
@@ -13,7 +16,7 @@
 | Previous API | Replacement |
 | --- | --- |
 | `shard_std!(WORKER)` and backend variants | `declare_shard!(pub Worker, runtime = std)`; choose `tokio`, `main`, `tokio_main`, or `slint` as needed |
-| Implicit module defaults / `use_shard!(WORKER)` | `#[scope(shard = super::Worker)]` on an inline module, or `#[eventful(shard = Worker)]` per type |
+| Implicit module defaults / `use_shard!(WORKER)` | `file_scope!(shard = Worker)` for a file, `#[scope(shard = super::Worker)]` on an inline module, or `#[eventful(shard = Worker)]` per type |
 | `Eventful::EventLoopHandleType` / `default_handle()` | `Eventful::Shard`; obtain a named handle with `ShardBinding::handle()` |
 | `#[sharded_main]` / `#[sharded_main(tokio)]` | Declare a main marker, then `#[sharded_main(Main)]` |
 | `WORKER.join()` and other backend operations | `Worker::shard().join()` |
