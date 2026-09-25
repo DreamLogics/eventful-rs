@@ -33,10 +33,10 @@ workspace examples and test dependencies are validated on stable Rust.
    changelog, and confirm repository/license metadata. Keep the root and package
    README identical; the detailed guide lives in `eventful-rs/GUIDE.md`.
 2. Commit the release and run `./scripts/check.sh`. Packaging requires a clean
-   working tree. During review, `cargo package -p eventful-rs-macros -p eventful-rs
-   --locked --allow-dirty` verifies the current files without publishing. If Cargo
-   reuses an older macro tarball at the same version during repeated local checks,
-   add `--target-dir "$(mktemp -d)"` to verify against a fresh temporary registry.
+   working tree. During review, `./scripts/check-packages.sh --allow-dirty`
+   verifies the current files without publishing. The script uses a fresh
+   temporary registry to avoid reusing older macro code at the same version,
+   and saves verified archives in `target/package/`.
 3. With crates.io credentials configured, publish in dependency order:
 
    ```sh
