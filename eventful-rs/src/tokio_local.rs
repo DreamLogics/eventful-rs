@@ -1,13 +1,19 @@
 //! Calling-thread shard using Tokio.
 use crate::{EventLoop, Eventful, HasEvents, ShardError, ShardId, ShardRc};
 use std::future::Future;
+/// Submission handle for this backend.
 pub type TokioLocalShardHandle = crate::ShardEventHandle;
 
+/// Single-use calling-thread event loop with Tokio timers and I/O.
 pub struct TokioLocalShard {
+    /// Shared implementation of the calling-thread driver.
     inner: crate::main_loop::MainLoop,
+    /// Identity of this shard.
     pub shard_id: ShardId,
 }
 impl TokioLocalShard {
+    /// Create a single-use Tokio event loop bound to this thread.
+    /// The name is reserved for compatibility and currently unused.
     pub fn new(_name: &str) -> Self {
         let inner = crate::main_loop::MainLoop::new(crate::background::Runtime::Tokio);
         let shard_id = inner.handle.shard_id;
@@ -22,12 +28,16 @@ impl TokioLocalShard {
     {
         self.inner.run_main(main)
     }
+    /// Drive until shutdown, once only, on the constructing thread and outside Tokio.
     pub fn run_event_loop(&self) {
         self.inner.run_event_loop()
     }
+    /// Reject new work and enqueue shutdown after previously accepted jobs.
     pub fn request_shutdown(&self) {
         self.handle().request_shutdown();
     }
+    /// Submit a construction factory immediately; await its result without blocking.
+    /// Returns an error for mismatched affinity, shutdown, cancellation, or a factory panic.
     pub fn bind_async<F, R, T>(
         &self,
         f: F,

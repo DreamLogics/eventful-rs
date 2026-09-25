@@ -41,15 +41,12 @@ impl Platform for Headless {
         Some(Box::new(Proxy(self.tx.clone())))
     }
     fn run_event_loop(&self) -> Result<(), slint::PlatformError> {
-        loop {
-            match self
-                .rx
-                .recv_timeout(Duration::from_secs(5))
-                .expect("Slint driver stalled")
-            {
-                Message::Invoke(f) => f(),
-                Message::Quit => break,
-            }
+        while let Message::Invoke(f) = self
+            .rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("Slint driver stalled")
+        {
+            f();
         }
         Ok(())
     }

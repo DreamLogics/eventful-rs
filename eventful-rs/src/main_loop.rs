@@ -1,3 +1,4 @@
+//! Single-use calling-thread execution shared by standard and Tokio backends.
 use crate::{
     background::Runtime,
     engine::{self, ContextGuard, Receiver, ShardEventHandle},
@@ -8,13 +9,19 @@ use std::{
     time::Duration,
 };
 
+/// Single-use driver owned by its constructing thread.
 pub(crate) struct MainLoop {
+    /// Thread-safe admission handle for this backend.
     pub(crate) handle: ShardEventHandle,
+    /// Constructing or worker thread identity used to enforce thread affinity.
     pub(crate) owner: thread::ThreadId,
+    /// Receiver consumed when the event loop starts; prevents a second run.
     rx: Mutex<Option<Receiver>>,
+    /// Executor selected when this loop was constructed.
     runtime: Runtime,
 }
 impl MainLoop {
+    /// Allocate a queue bound to the current thread; execution starts separately.
     pub(crate) fn new(runtime: Runtime) -> Self {
         let (handle, rx) = ShardEventHandle::channel();
         Self {
@@ -24,6 +31,7 @@ impl MainLoop {
             runtime,
         }
     }
+    /// Run an application future alongside the driver and propagate its result or panic.
     pub(crate) fn run_main<F, RF, R>(&self, main: F) -> R
     where
         F: FnOnce() -> RF + 'static,
@@ -50,9 +58,11 @@ impl MainLoop {
             Err(panic) => std::panic::resume_unwind(panic),
         }
     }
+    /// Drive until an explicit shutdown request arrives.
     pub(crate) fn run_event_loop(&self) {
         self.run(None);
     }
+    /// Enforce owner-thread and single-run constraints, then drive the selected executor.
     fn run(&self, initial: Option<engine::LocalFuture>) {
         assert_eq!(
             thread::current().id(),

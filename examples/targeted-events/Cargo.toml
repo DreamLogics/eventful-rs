@@ -7,3 +7,6 @@ license.workspace = true
 
 [dependencies]
 eventful-rs = { path = "../../eventful-rs", default-features = false }
+
+[dev-dependencies]
+assert_cmd = "2"

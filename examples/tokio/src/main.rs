@@ -1,15 +1,19 @@
 use crate::web::*;
 use eventful_rs::*;
 use std::io::{Read, Write};
+/// Tokio-backed HTTP client and its typed response signal.
 mod web;
 declare_shard!(pub Main, runtime = main);
 
+/// Main-thread listener coordinating HTTP work.
 #[eventful(shard = Main)]
 struct App {
+    /// Strong handle retaining the background HTTP client.
     web_client: ShardRcHandle<WebClient>,
 }
 #[asynchronize]
 impl App {
+    /// Construct this example value and initialize its event storage.
     async fn new() -> Result<ShardRcHandle<Self>, InvokeError> {
         let web_client = WebClient::new().await?;
         let client = web_client.clone();
@@ -21,10 +25,12 @@ impl App {
         web_client.on_response().connect(&app);
         Ok(app)
     }
+    /// Request a download and wait for its response event.
     #[asynced]
     async fn run(&self, url: String) -> Result<(), String> {
         self.web_client.fetch(url).await
     }
+    /// Read the last successfully downloaded URL.
     #[asynced]
     async fn last_url(&self) -> Option<String> {
         self.web_client.last_url().await

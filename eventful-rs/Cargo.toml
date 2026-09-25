@@ -4,12 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository = "https://github.com/DreamLogics/eventful-rs"
 description = "Thread-affine values, typed events, and asynchronous method dispatch for Rust"
 readme = "README.md"
 documentation = "https://docs.rs/eventful-rs"
 keywords = ["events", "async", "actor", "signals", "tokio"]
 categories = ["asynchronous", "concurrency"]
-include = ["src/**", "tests/**", "README.md", "LICENSE", "Cargo.toml"]
+include = ["src/**", "tests/**", "README.md", "GUIDE.md", "LICENSE", "Cargo.toml"]
 
 [features]
 default = ["tokio"]
@@ -27,4 +28,4 @@ slint = { version = "1.17.1", default-features = false, features = ["std", "comp
 trybuild = "1"
 
 [package.metadata.docs.rs]
-features = ["tokio"]
+all-features = true

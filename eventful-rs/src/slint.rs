@@ -6,15 +6,23 @@ use crate::{
 };
 use futures::{FutureExt, channel::oneshot, future::Shared};
 use std::{future::Future, time::Duration};
+/// Submission handle for this backend.
 pub type SlintShardHandle = crate::ShardEventHandle;
 
+/// Adapter driven by an application-owned Slint UI event loop.
 pub struct SlintShard {
+    /// Thread-safe admission handle for this backend.
     handle: SlintShardHandle,
+    /// Identity of this shard.
     pub shard_id: ShardId,
+    /// Constructing or worker thread identity used to enforce thread affinity.
     owner: std::thread::ThreadId,
+    /// Cloneable completion notification from the Slint driver.
     done: Shared<oneshot::Receiver<()>>,
 }
 impl SlintShard {
+    /// Schedule the driver on the current UI thread.
+    /// Panics if the Slint event loop is unavailable.
     pub fn new() -> Self {
         let (handle, rx) = SlintShardHandle::channel();
         let (done_tx, done_rx) = oneshot::channel();
@@ -53,9 +61,12 @@ impl SlintShard {
             .await
             .map_err(|_| ShardError::JoinError("Slint driver ended unexpectedly".into(), None))
     }
+    /// Reject new work and enqueue shutdown after previously accepted jobs.
     pub fn request_shutdown(&self) {
         self.handle.request_shutdown();
     }
+    /// Submit a construction factory immediately; await its result without blocking.
+    /// Returns an error for mismatched affinity, shutdown, cancellation, or a factory panic.
     pub fn bind_async<F, R, T>(
         &self,
         f: F,

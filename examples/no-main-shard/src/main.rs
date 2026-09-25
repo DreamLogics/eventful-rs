@@ -1,24 +1,31 @@
+//! Monitor a device from a synchronous application using two background shards.
 use std::thread;
 
 use eventful_rs::events;
 use eventful_rs::{EventLoop, ShardHandle, declare_shard, eventful};
 
-use crate::bar::BarShard;
+use crate::monitor::MonitorShard;
 
-declare_shard!(pub FooShard, runtime = std);
+declare_shard!(pub DeviceShard, runtime = std);
 
+/// Updates emitted by a background telemetry source.
 #[events]
-trait FooEvents {
-    fn on_hello(&self, name: String);
+trait TelemetryEvents {
+    /// Announce a connected device.
+    fn connected(&self, name: String);
+    /// Report the latest device coordinates.
     fn on_position(&self, x: f32, y: f32);
 }
 
-#[eventful(FooEvents, shard = FooShard)]
-struct Foo {
+/// Device state owned by the telemetry worker.
+#[eventful(TelemetryEvents, shard = DeviceShard)]
+struct Device {
+    /// Human-readable device name.
     name: String,
 }
 
-impl Foo {
+impl Device {
+    /// Construct this example value and initialize its event storage.
     fn new(name: String) -> Self {
         Self {
             name,
@@ -26,52 +33,62 @@ impl Foo {
         }
     }
 
-    fn say_hello(&self) {
-        self.emit_on_hello(format!("Hello, world! {}", self.name));
+    /// Publish a sample device status and position.
+    fn publish_status(&self) {
+        self.emit_connected(format!("Device online: {}", self.name));
         self.emit_on_position(12.0, 34.0);
     }
 }
 
-mod bar {
+/// Display-side listener living on its own background shard.
+mod monitor {
 
     use super::*;
-    declare_shard!(pub BarShard, runtime = std);
+    declare_shard!(pub MonitorShard, runtime = std);
 
-    #[eventful(shard = BarShard)]
-    pub struct Bar;
+    /// Display device updates on the monitor shard.
+    #[eventful(shard = MonitorShard)]
+    pub struct Monitor;
 
-    impl Bar {
+    impl Monitor {
+        /// Construct this example value and initialize its event storage.
         pub fn new() -> Self {
-            Bar {
+            Monitor {
                 events: Default::default(),
             }
         }
     }
 
-    impl FooEvents for Bar {
-        fn on_hello(&self, name: String) {
-            println!("Bar received on {:?}: {name}", thread::current().name());
+    impl TelemetryEvents for Monitor {
+        fn connected(&self, name: String) {
+            println!("Monitor received on {:?}: {name}", thread::current().name());
         }
 
         fn on_position(&self, x: f32, y: f32) {
-            println!("Bar moved to ({x}, {y}) on {:?}", thread::current().name());
+            println!(
+                "Monitor moved to ({x}, {y}) on {:?}",
+                thread::current().name()
+            );
         }
     }
 }
 
+/// Publish three samples and stop the producer before draining its listener.
 fn main() {
-    let source = FooShard::shard().bind(|sharded| sharded(Foo::new("Sera".to_owned())).as_handle());
-    let bar = BarShard::shard().bind(|sharded| sharded(bar::Bar::new()).as_handle());
+    let source = DeviceShard::shard()
+        .bind(|sharded| sharded(Device::new("Warehouse scanner".to_owned())).as_handle());
+    let monitor =
+        MonitorShard::shard().bind(|sharded| sharded(monitor::Monitor::new()).as_handle());
 
-    // Subscribe the listener to every event in FooEvents.
-    source.connect(&bar);
+    // Subscribe the listener to every event in TelemetryEvents.
+    source.connect(&monitor);
 
     source.upgrade_in_shard(|source| {
         for _ in 0..3 {
-            source.say_hello();
+            source.publish_status();
         }
     });
 
-    FooShard::shard().join().unwrap();
-    bar::BarShard::shard().join().unwrap();
+    DeviceShard::shard().join().unwrap();
+    monitor::MonitorShard::shard().join().unwrap();
 }

@@ -10,7 +10,7 @@ error[E0599]: the method `emit_labelled_tracked` exists for struct `Event<(), La
   = note: the following trait bounds were not satisfied:
           `Label: EventLabel`
 note: the trait `EventLabel` must be implemented
- --> src/lib.rs
+ --> src/event.rs
   |
   | pub trait EventLabel: Send + Sync + 'static {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -28,7 +28,7 @@ error[E0599]: the method `add_tracked_connection` exists for struct `Event<(), L
   = note: the following trait bounds were not satisfied:
           `Label: EventLabel`
 note: the trait `EventLabel` must be implemented
- --> src/lib.rs
+ --> src/event.rs
   |
   | pub trait EventLabel: Send + Sync + 'static {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -46,7 +46,7 @@ error[E0599]: the method `add_labelled_tracked_connection` exists for struct `Ev
   = note: the following trait bounds were not satisfied:
           `Label: EventLabel`
 note: the trait `EventLabel` must be implemented
- --> src/lib.rs
+ --> src/event.rs
   |
   | pub trait EventLabel: Send + Sync + 'static {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -64,7 +64,7 @@ error[E0599]: the method `emit_labelled` exists for struct `Event<(), Label>`, b
   = note: the following trait bounds were not satisfied:
           `Label: EventLabel`
 note: the trait `EventLabel` must be implemented
- --> src/lib.rs
+ --> src/event.rs
   |
   | pub trait EventLabel: Send + Sync + 'static {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -7,6 +7,6 @@ fn example_completes_with_expected_output() {
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&assertion.get_output().stdout);
-    assert_eq!(stdout.matches("Bar received").count(), 3, "{stdout}");
-    assert_eq!(stdout.matches("Bar moved").count(), 3, "{stdout}");
+    assert_eq!(stdout.matches("Monitor received").count(), 3, "{stdout}");
+    assert_eq!(stdout.matches("Monitor moved").count(), 3, "{stdout}");
 }

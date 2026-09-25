@@ -1,3 +1,4 @@
+//! Dedicated-thread backend startup and coordinated shutdown.
 use crate::{
     ShardError,
     engine::{self, ContextGuard, ShardEventHandle},
@@ -8,22 +9,33 @@ use std::{
     time::Duration,
 };
 
+/// Select the executor used to poll the common shard driver.
 #[derive(Clone, Copy)]
 pub(crate) enum Runtime {
+    /// Use the executor-independent futures executor.
     Standard,
+    /// Use a current-thread Tokio runtime with I/O and time enabled.
     #[cfg(feature = "tokio")]
     Tokio,
 }
+/// Serialize concurrent joins and cache the worker exit outcome.
 struct JoinState {
+    /// Join handle consumed exactly once by the first joining caller.
     thread: Option<thread::JoinHandle<()>>,
+    /// Cached thread outcome returned to repeated joiners.
     result: Option<Result<(), String>>,
 }
+/// Background state retained by the backend and global registry.
 struct Shared {
+    /// Thread-safe admission handle for this backend.
     handle: ShardEventHandle,
+    /// Constructing or worker thread identity used to enforce thread affinity.
     owner: thread::ThreadId,
+    /// Protects the one-time thread join and reusable result.
     join: Mutex<JoinState>,
 }
 impl Shared {
+    /// Reject self-joins, request shutdown, and observe the cached worker outcome.
     fn join(&self) -> Result<(), ShardError> {
         if thread::current().id() == self.owner {
             return Err(ShardError::JoinError(
@@ -49,10 +61,13 @@ impl Shared {
             .map_err(|e| ShardError::JoinError(e, None))
     }
 }
+/// Own a dedicated thread while exposing the common submission handle.
 pub(crate) struct Background {
+    /// State shared with registry callbacks and asynchronous joiners.
     shared: Arc<Shared>,
 }
 impl Background {
+    /// Start a worker and register its join callback only after successful initialization.
     pub(crate) fn new(name: &str, runtime: Runtime, grace: Duration) -> std::io::Result<Self> {
         let (handle, rx) = ShardEventHandle::channel();
         let worker_handle = handle.clone();
@@ -121,12 +136,15 @@ impl Background {
         crate::register_shard(shared.handle.shard_id, Box::new(move || registered.join()));
         Ok(Self { shared })
     }
+    /// Clone the backend admission handle.
     pub(crate) fn handle(&self) -> ShardEventHandle {
         self.shared.handle.clone()
     }
+    /// Read the worker identity for same-thread checks.
     pub(crate) fn owner(&self) -> thread::ThreadId {
         self.shared.owner
     }
+    /// Reject self-joins, request shutdown, and observe the cached worker outcome.
     pub(crate) fn join(&self) -> Result<(), ShardError> {
         #[cfg(feature = "tokio")]
         if ::tokio::runtime::Handle::try_current().is_ok() {
@@ -137,6 +155,7 @@ impl Background {
         }
         self.shared.join()
     }
+    /// Perform the blocking join on Tokio blocking capacity, rejecting self-joins.
     #[cfg(feature = "tokio")]
     pub(crate) async fn join_async(&self) -> Result<(), ShardError> {
         if thread::current().id() == self.owner() {

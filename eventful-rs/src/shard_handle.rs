@@ -1,7 +1,10 @@
-use std::{any::Any, collections::HashMap, rc::Rc, sync::Arc};
+//! Local values and strong or weak cross-thread handles.
+use std::{rc::Rc, sync::Arc};
 
 use crate::{EventLoopHandle, Eventful, HasEvents};
 
+mod store;
+pub(crate) use store::{ShardRcId, ShardRcStore};
 mod joined;
 pub use joined::JoinedHandles;
 
@@ -48,27 +51,34 @@ where
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static;
 
+    /// Make a handle that does not keep the target value alive.
     fn downgrade(&self) -> ShardWeakHandle<T>
     where
         T: Eventful + HasEvents<T::EventSetType> + Sized + 'static;
 }
 
+/// Convert a local value or remote handle into a dispatch handle.
 pub trait Sharded<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
+    /// Clone a handle suitable for cross-thread dispatch.
     fn as_handle(&self) -> impl ShardHandle<T>;
 }
 
 // Keep lifetime-bound subscriptions in the same Rc allocation as the value.
 // Store entries, local clones, and in-flight callbacks all retain this allocation.
 // Connections drop before T, including during shard shutdown.
+/// Keep value-owned connections in the same allocation as the value.
 pub(crate) struct ShardValue<T> {
+    /// Subscriptions dropped before the value, including during shutdown.
     connections: std::cell::RefCell<Vec<crate::ScopedConnectionGroup>>,
+    /// The shard-local application value.
     value: T,
 }
 
 impl<T> ShardValue<T> {
+    /// Wrap a local allocation or value with its connection and identity metadata.
     pub(crate) fn new(value: T) -> Self {
         Self {
             connections: Default::default(),
@@ -90,14 +100,20 @@ impl<T: std::fmt::Debug> std::fmt::Debug for ShardValue<T> {
     }
 }
 
+/// Strong, owner-thread reference to a value. This reference cannot cross threads.
+/// Dereferences to the value; use [`Self::as_handle`] for remote access.
 #[derive(Debug)]
 pub struct ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
+    /// Store key and strong lifetime token for the local value.
     id: ShardRcId,
+    /// Keep value-owned connections in the same allocation as the value.
     inner: Rc<ShardValue<T>>,
+    /// Admission handle for the value owner.
     shard_handle: crate::ShardEventHandle,
+    /// Shared typed signal interface. Keeping it alive does not retain the value.
     pub events: Arc<T::EventSetType>,
 }
 
@@ -105,6 +121,7 @@ impl<T> ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
+    /// Wrap a local allocation or value with its connection and identity metadata.
     pub(crate) fn new(
         id: ShardRcId,
         value: Rc<ShardValue<T>>,
@@ -119,6 +136,7 @@ where
         }
     }
 
+    /// Clone a strong handle without moving the shard-local value.
     pub fn as_handle(&self) -> ShardRcHandle<T> {
         ShardRcHandle {
             id: self.id.clone(),
@@ -127,6 +145,7 @@ where
         }
     }
 
+    /// Borrow the shared typed signal interface.
     pub fn events(&self) -> &Arc<T::EventSetType> {
         &self.events
     }
@@ -136,6 +155,7 @@ impl<T> Sharded<T> for ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
+    /// Clone a handle suitable for cross-thread dispatch.
     fn as_handle(&self) -> impl ShardHandle<T> {
         self.as_handle()
     }
@@ -152,13 +172,18 @@ where
     }
 }
 
+/// Strong thread-safe handle retaining a value while its shard is running.
+/// Shutdown destroys the store even when handles remain alive.
 #[derive(Debug)]
 pub struct ShardRcHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
+    /// Store key and strong lifetime token for the local value.
     id: ShardRcId,
+    /// Admission handle for the value owner.
     shard_handle: crate::ShardEventHandle,
+    /// Shared typed signal interface. Keeping it alive does not retain the value.
     pub events: Arc<T::EventSetType>,
 }
 
@@ -214,6 +239,7 @@ where
         self.shard_handle.deferred_invoke(self.clone(), task).await
     }
 
+    /// Make a handle that does not keep the target value alive.
     fn downgrade(&self) -> ShardWeakHandle<T>
     where
         T: Eventful + HasEvents<<T as Eventful>::EventSetType> + Sized + 'static,
@@ -230,18 +256,24 @@ impl<T> Sharded<T> for ShardRcHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
+    /// Clone a handle suitable for cross-thread dispatch.
     fn as_handle(&self) -> impl ShardHandle<T> {
         self.clone()
     }
 }
 
+/// Thread-safe handle that does not retain its target or event storage.
+/// Untracked calls skip expired targets; tracked calls report delivery failures.
 #[derive(Debug)]
 pub struct ShardWeakHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
+    /// Stable key identifying this entry within its owner storage.
     id: usize,
+    /// Admission handle for the value owner.
     shard_handle: crate::ShardEventHandle,
+    /// Weak reference to the typed signal interface.
     pub events: std::sync::Weak<T::EventSetType>,
 }
 
@@ -314,6 +346,7 @@ where
         self.shard_handle.deferred_invoke(self.clone(), task).await
     }
 
+    /// Make a handle that does not keep the target value alive.
     fn downgrade(&self) -> ShardWeakHandle<T>
     where
         T: Eventful + HasEvents<<T as Eventful>::EventSetType> + Sized + 'static,
@@ -326,78 +359,12 @@ impl<T> Sharded<T> for ShardWeakHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
+    /// Clone a handle suitable for cross-thread dispatch.
     fn as_handle(&self) -> impl ShardHandle<T> {
         self.clone()
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ShardRcId {
-    id: Arc<usize>,
-}
-
-pub struct ShardRcStore {
-    values: HashMap<usize, (Rc<dyn Any>, ShardRcId)>,
-    last_id: usize,
-}
-
-impl ShardRcStore {
-    pub fn new() -> Self {
-        Self {
-            values: HashMap::new(),
-            last_id: 0,
-        }
-    }
-
-    pub fn insert<T>(&mut self, value: Rc<T>) -> ShardRcId
-    where
-        T: 'static,
-    {
-        self.last_id += 1;
-        let id = self.last_id;
-        let sid = ShardRcId { id: Arc::new(id) };
-        self.values.insert(id, (value, sid.clone()));
-        sid
-    }
-
-    pub fn get<T>(&self, id: usize) -> Option<Rc<T>>
-    where
-        T: 'static,
-    {
-        self.values
-            .get(&id)
-            .and_then(|(value, _)| value.clone().downcast::<T>().ok())
-    }
-
-    pub fn remove(&mut self, id: usize) {
-        self.values.remove(&id);
-    }
-
-    pub(crate) fn take_garbage(&mut self) -> Vec<Rc<dyn Any>> {
-        let ids_to_remove: Vec<usize> = self
-            .values
-            .iter()
-            .filter_map(|(&id, (value, sid))| {
-                if Arc::strong_count(&sid.id) == 1 && Rc::strong_count(value) == 1 {
-                    Some(id)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        ids_to_remove
-            .into_iter()
-            .filter_map(|id| self.values.remove(&id).map(|(value, _)| value))
-            .collect()
-    }
-}
-
-impl Default for ShardRcStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 impl<T> Clone for ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + 'static,
@@ -527,48 +494,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    struct Value {
-        events: Arc<()>,
-    }
-    impl Eventful for Value {
-        type EventSetType = ();
-        type Shard = crate::DynamicShard;
-    }
-    impl HasEvents<()> for Value {
-        fn events(&self) -> &Arc<()> {
-            &self.events
-        }
-    }
-    #[test]
-    fn collection_preserves_local_references_and_strong_handle_tokens() {
-        let mut store = ShardRcStore::new();
-        let value = Rc::new(Value {
-            events: Arc::new(()),
-        });
-        let token = store.insert(value.clone());
-        assert!(store.take_garbage().is_empty());
-        drop(token);
-        assert!(store.take_garbage().is_empty());
-        drop(value);
-        assert_eq!(store.take_garbage().len(), 1);
-        assert!(store.take_garbage().is_empty());
-    }
-    #[test]
-    fn weak_handle_does_not_keep_event_set_alive() {
-        let (handle, _rx) = crate::ShardEventHandle::channel();
-        let mut store = ShardRcStore::new();
-        let value = Rc::new(ShardValue::new(Value {
-            events: Arc::new(()),
-        }));
-        let id = store.insert(value.clone());
-        let local = ShardRc::new(id, value, handle);
-        let weak = local.as_handle().downgrade();
-        let events = Arc::downgrade(&local.events);
-        drop(local);
-        drop(store.take_garbage());
-        assert!(events.upgrade().is_none());
-        assert!(weak.events.upgrade().is_none());
-    }
-}
+mod tests;

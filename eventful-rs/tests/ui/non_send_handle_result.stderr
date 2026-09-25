@@ -11,7 +11,7 @@ note: required because it appears within the type `ShardRc<Value>`
   | pub struct ShardRc<T>
   |            ^^^^^^^
 note: required by a bound in `bind`
- --> src/lib.rs
+ --> src/event_loop.rs
   |
   |     fn bind<F, R, T>(&self, f: F) -> R
   |        ---- required by a bound in this associated function

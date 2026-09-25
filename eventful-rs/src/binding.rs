@@ -1,16 +1,31 @@
+//! Named shard declarations and compile-time or dynamic affinity.
 use crate::{Eventful, HasEvents, InvokeError, ShardEventHandle, ShardId, ShardRc};
 use std::future::Future;
 
 /// Affinity used to validate binding through a runtime shard handle.
 /// Named bindings return one stable shard ID. DynamicShard accepts any shard.
 pub trait ShardAffinity: 'static {
+    /// Return the required shard identity, or `None` for dynamic affinity.
     fn shard_id() -> Option<ShardId>;
 }
 
 /// Explicit opt-in to selecting a shard at runtime with bind/bind_async.
 /// Such a value's actual destination is carried by its handle, not its type.
+///
+/// ```
+/// use eventful_rs::*;
+/// #[eventful(shard = DynamicShard)]
+/// struct Session;
+/// let worker = shard::Shard::new("session-worker");
+/// let session = futures::executor::block_on(worker.bind_async(|bind| {
+///     bind(Session { events: Default::default() }).as_handle()
+/// })).unwrap();
+/// drop(session);
+/// worker.join().unwrap();
+/// ```
 pub enum DynamicShard {}
 impl ShardAffinity for DynamicShard {
+    /// Return the required shard identity, or `None` for dynamic affinity.
     fn shard_id() -> Option<ShardId> {
         None
     }
@@ -19,6 +34,7 @@ impl ShardAffinity for DynamicShard {
 /// A named singleton shard. Implementations must always return the same shard.
 /// Prefer declare_shard! to implementing this trait manually.
 pub trait ShardBinding: 'static {
+    /// Access the singleton submission handle, initializing its backend if needed.
     fn handle() -> ShardEventHandle;
 
     /// Bind values of this affinity. A mismatched eventful type fails to compile.
@@ -33,6 +49,7 @@ pub trait ShardBinding: 'static {
     }
 }
 impl<S: ShardBinding> ShardAffinity for S {
+    /// Return the required shard identity, or `None` for dynamic affinity.
     fn shard_id() -> Option<ShardId> {
         use crate::EventLoopHandle;
         Some(Self::handle().shard_id())
@@ -79,6 +96,7 @@ macro_rules! declare_shard {
             $crate::slint::SlintShard::new());
     };
     (@impl $vis:vis $name:ident, $backend:ty, $init:expr) => {
+        /// Marker for a lazily initialized singleton shard.
         $vis enum $name {}
         impl $name {
             /// Access the singleton backend, initializing it on first use.
@@ -89,7 +107,8 @@ macro_rules! declare_shard {
             }
         }
         impl $crate::ShardBinding for $name {
-            fn handle() -> $crate::ShardEventHandle {
+            /// Access the singleton submission handle, initializing its backend if needed.
+    fn handle() -> $crate::ShardEventHandle {
                 $crate::EventLoop::handle(Self::shard())
             }
         }

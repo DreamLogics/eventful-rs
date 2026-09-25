@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository = "https://github.com/DreamLogics/eventful-rs"
 description = "Procedural macros for eventful-rs typed events and shard dispatch"
 readme = "README.md"
 documentation = "https://docs.rs/eventful-rs-macros"

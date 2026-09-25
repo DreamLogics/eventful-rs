@@ -2221,6 +2221,7 @@ checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
 name = "targeted-events"
 version = "0.0.0"
 dependencies = [
+ "assert_cmd",
  "eventful-rs",
 ]
 

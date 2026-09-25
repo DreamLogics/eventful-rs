@@ -1,6 +1,7 @@
+//! Individual and grouped subscription lifetimes.
 use std::sync::Arc;
 
-use crate::EventInternal;
+use crate::event::EventInternal;
 
 /// A Connection instance represents a connection between an event
 /// and a listener. It can be used to disconnect the listener from the event.
@@ -8,20 +9,22 @@ use crate::EventInternal;
 /// you may use the `scoped` method to create a ScopedConnection if this is desired.
 /// `Label` is the signal routing type; it defaults to `()` for unlabelled events.
 pub struct Connection<Args, Label = ()> {
+    /// Stable key identifying this entry within its owner storage.
     id: usize,
+    /// Shared subscription storage for a signal signature and label type.
     event: Arc<EventInternal<Args, Label>>,
 }
 
 impl<Args, Label> Connection<Args, Label> {
+    /// Create a token for an already registered subscription.
     pub(crate) fn new(id: usize, event: Arc<EventInternal<Args, Label>>) -> Self {
         Self { id, event }
     }
 
-    /// Disconnects the listener from the event. After calling this method,
-    /// the listener will no longer receive events.
+    /// Remove this subscription from future emission snapshots.
+    /// Deliveries already captured by an emission may still run.
     pub fn disconnect(self) {
-        let mut connections = self.event.connections.lock().unwrap();
-        connections.retain(|c| c.id != self.id);
+        self.event.disconnect(self.id);
     }
 
     /// Creates a ScopedConnection instance that will automatically disconnect
@@ -36,11 +39,14 @@ impl<Args, Label> Connection<Args, Label> {
 /// Dropping a ScopedConnection instance will automatically disconnect
 /// the listener from the event.
 pub struct ScopedConnection<Args, Label = ()> {
+    /// Stable key identifying this entry within its owner storage.
     id: usize,
+    /// Shared subscription storage for a signal signature and label type.
     event: Arc<EventInternal<Args, Label>>,
 }
 
 impl<Args, Label> ScopedConnection<Args, Label> {
+    /// Create a token for an already registered subscription.
     pub(crate) fn new(id: usize, event: Arc<EventInternal<Args, Label>>) -> Self {
         Self { id, event }
     }
@@ -48,8 +54,7 @@ impl<Args, Label> ScopedConnection<Args, Label> {
 
 impl<Args, Label> Drop for ScopedConnection<Args, Label> {
     fn drop(&mut self) {
-        let mut connections = self.event.connections.lock().unwrap();
-        connections.retain(|c| c.id != self.id);
+        self.event.disconnect(self.id);
     }
 }
 
@@ -59,6 +64,7 @@ impl<Args, Label> Drop for ScopedConnection<Args, Label> {
 /// also disconnect when their owning value is destroyed. Targets remain weak.
 #[derive(Clone, Default)]
 pub struct ConnectionGroup {
+    /// Type-erased removers for the individual signal subscriptions.
     disconnectors: Vec<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -69,8 +75,7 @@ impl ConnectionGroup {
         connection: Connection<Args, Label>,
     ) {
         self.disconnectors.push(Arc::new(move || {
-            let mut connections = connection.event.connections.lock().unwrap();
-            connections.retain(|c| c.id != connection.id);
+            connection.event.disconnect(connection.id);
         }));
     }
 
@@ -80,6 +85,7 @@ impl ConnectionGroup {
         self.disconnect_all();
     }
 
+    /// Remove each subscription independently; queued snapshots remain valid.
     fn disconnect_all(&self) {
         for disconnect in &self.disconnectors {
             disconnect();
@@ -108,6 +114,7 @@ pub trait ConnectEvents<T>
 where
     T: crate::Eventful + crate::HasEvents<T::EventSetType> + 'static,
 {
+    /// Subscribe the target to every signal; the target is held weakly.
     fn connect_events<S: crate::Sharded<T>>(&self, target: &S) -> ConnectionGroup;
 }
 

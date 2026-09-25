@@ -1,158 +1,180 @@
-//! Route marbles across shards using application-defined bitmask labels.
+//! Route business notifications to topic subscribers across shards.
 //!
-//! A subscription accepts any marble whose colors overlap its mask. The library
+//! An operations dashboard subscribes to orders and shipping; billing has its own listener. The library
 //! checks that rule before queuing a callback; receivers never filter payloads.
 eventful_rs::declare_shard!(pub Main, runtime = main);
 use eventful_rs::*;
 
+/// Business areas used for routing subscriptions.
 #[derive(Debug, Clone, Copy)]
-enum Color {
-    Red,
-    Green,
-    Blue,
+enum Topic {
+    /// Order lifecycle notifications.
+    Orders,
+    /// Billing notifications.
+    Billing,
+    /// Shipment notifications.
+    Shipping,
 }
 
-/// One routing label can describe several colors without multi-label API support.
-struct ColorMask(u8);
+/// One routing label can describe several topics without multi-label API support.
+struct Topics(u8);
 
-impl ColorMask {
-    const RED: Self = Self(1);
-    const GREEN: Self = Self(2);
-    const BLUE: Self = Self(4);
+impl Topics {
+    /// Subscribe to order events.
+    const ORDERS: Self = Self(1);
+    /// Subscribe to billing events.
+    const BILLING: Self = Self(2);
+    /// Subscribe to shipment events.
+    const SHIPPING: Self = Self(4);
 
-    fn from_colors(colors: &[Color]) -> Self {
-        Self(colors.iter().fold(0, |mask, color| {
-            mask | match color {
-                Color::Red => Self::RED.0,
-                Color::Green => Self::GREEN.0,
-                Color::Blue => Self::BLUE.0,
+    /// Combine business topics into a routing mask.
+    fn from_topics(topics: &[Topic]) -> Self {
+        Self(topics.iter().fold(0, |mask, topic| {
+            mask | match topic {
+                Topic::Orders => Self::ORDERS.0,
+                Topic::Billing => Self::BILLING.0,
+                Topic::Shipping => Self::SHIPPING.0,
             }
         }))
     }
 }
 
-impl EventLabel for ColorMask {
+impl EventLabel for Topics {
     /// Accept any overlap. Applications could instead require every subscribed bit.
     fn matches(&self, emitted: &Self) -> bool {
         self.0 & emitted.0 != 0
     }
 }
 
+/// Business update routed to interested subscribers.
 #[derive(Debug, Clone)]
-struct Marble {
-    colors: Vec<Color>,
+struct Notification {
+    /// Business message displayed by matching subscribers.
+    message: String,
+    /// Business topics attached to the notification.
+    topics: Vec<Topic>,
 }
 
+/// Listener interface for published business notifications.
 #[events]
-trait MarbleCreatorEvents {
-    #[with_label(ColorMask)]
-    fn on_create_marble(&self, marble: Marble);
+trait NotificationEvents {
+    /// Receive a notification selected by the routing layer.
+    #[with_label(Topics)]
+    fn on_publish(&self, notification: Notification);
 }
 
-#[eventful(MarbleCreatorEvents, shard = Main)]
-struct MarbleCreator;
+#[eventful(NotificationEvents, shard = Main)]
+struct NotificationBus;
 
-impl MarbleCreator {
+impl NotificationBus {
     /// The label is supplied at emission and is not part of the handler signature.
-    async fn create_marble(&self, colors: Vec<Color>) -> Result<(), DeliveryError> {
-        let label = ColorMask::from_colors(&colors);
-        self.emit_on_create_marble_tracked(label, Marble { colors })
+    async fn publish(&self, topics: Vec<Topic>, message: String) -> Result<(), DeliveryError> {
+        let label = Topics::from_topics(&topics);
+        self.emit_on_publish_tracked(label, Notification { topics, message })
             .await
     }
 }
 
-#[scope(shard = MarbleShard)]
-mod marbles {
+/// Subscribers with state confined to a background shard.
+#[scope(shard = NotificationShard)]
+mod notifications {
     use std::cell::RefCell;
 
     use super::*;
-    declare_shard!(pub MarbleShard, runtime = std);
+    declare_shard!(pub NotificationShard, runtime = std);
 
+    /// Collect notifications accepted by an external subscription.
     #[eventful]
-    pub struct MarbleReceiver {
+    pub struct Subscriber {
+        /// Label printed when this subscriber receives an update.
         name: &'static str,
-        received_marbles: RefCell<Vec<Marble>>,
+        /// Notifications delivered to this subscriber.
+        received_notifications: RefCell<Vec<Notification>>,
     }
 
     #[asynchronize]
-    impl MarbleReceiver {
+    impl Subscriber {
+        /// Construct this example value and initialize its event storage.
         pub async fn new(name: &'static str) -> Result<ShardRcHandle<Self>, InvokeError> {
             Self::spawn(move || Self {
                 name,
-                received_marbles: RefCell::new(Vec::new()),
+                received_notifications: RefCell::new(Vec::new()),
                 events: Default::default(),
             })
             .await
         }
 
+        /// Read how many notifications reached this subscriber.
         #[asynced]
         pub fn total_received(&self) -> usize {
-            self.received_marbles.borrow().len()
+            self.received_notifications.borrow().len()
         }
     }
 
-    impl MarbleCreatorEvents for MarbleReceiver {
-        fn on_create_marble(&self, marble: Marble) {
-            // No color check: only matching emissions reach this handler.
-            println!("{} received {:?}", self.name, marble.colors);
-            self.received_marbles.borrow_mut().push(marble);
+    impl NotificationEvents for Subscriber {
+        fn on_publish(&self, notification: Notification) {
+            // No topic check: only matching emissions reach this handler.
+            println!(
+                "{} received {:?}: {}",
+                self.name, notification.topics, notification.message
+            );
+            self.received_notifications.borrow_mut().push(notification);
         }
     }
 }
 
+/// Run the scenario and verify its observable results before shutting down.
 #[sharded_main(Main)]
 async fn main() {
-    use marbles::*;
-    let red = MarbleReceiver::new("Red").await.unwrap();
-    let green = MarbleReceiver::new("Green").await.unwrap();
-    let blue = MarbleReceiver::new("Blue").await.unwrap();
-    let red_or_blue = MarbleReceiver::new("Red or blue").await.unwrap();
-    let observer = MarbleReceiver::new("All marbles").await.unwrap();
-    let creator: ShardRc<MarbleCreator> = MarbleCreator {
+    use notifications::*;
+    let orders = Subscriber::new("Orders").await.unwrap();
+    let billing = Subscriber::new("Billing").await.unwrap();
+    let shipping = Subscriber::new("Shipping").await.unwrap();
+    let orders_or_shipping = Subscriber::new("Orders or shipping").await.unwrap();
+    let observer = Subscriber::new("All notifications").await.unwrap();
+    let bus: ShardRc<NotificationBus> = NotificationBus {
         events: Default::default(),
     }
     .into();
 
-    creator
-        .on_create_marble()
-        .connect_labelled(&red, ColorMask::RED);
-    creator
-        .on_create_marble()
-        .connect_labelled(&green, ColorMask::GREEN);
-    creator
-        .on_create_marble()
-        .connect_labelled(&blue, ColorMask::BLUE);
-    creator.on_create_marble().connect_labelled(
-        &red_or_blue,
-        ColorMask(ColorMask::RED.0 | ColorMask::BLUE.0),
+    bus.on_publish().connect_labelled(&orders, Topics::ORDERS);
+    bus.on_publish().connect_labelled(&billing, Topics::BILLING);
+    bus.on_publish()
+        .connect_labelled(&shipping, Topics::SHIPPING);
+    bus.on_publish().connect_labelled(
+        &orders_or_shipping,
+        Topics(Topics::ORDERS.0 | Topics::SHIPPING.0),
     );
-    // An ordinary connection is a wildcard, including for an empty color mask.
-    creator.on_create_marble().connect(&observer);
+    // An ordinary connection is a wildcard, including for an empty topic mask.
+    bus.on_publish().connect(&observer);
 
-    // Deterministic cases show overlap, a nonmatch, and an empty label. A red/blue
-    // marble reaches the combined subscriber once, even though both bits match.
-    for colors in [
-        vec![Color::Red],
-        vec![Color::Green],
-        vec![Color::Blue],
-        vec![Color::Red, Color::Blue],
-        vec![Color::Red, Color::Green, Color::Blue],
-        vec![],
+    // Deterministic cases show overlap, a nonmatch, and an empty label. An orders/shipping
+    // notification reaches the combined subscriber once, even though both bits match.
+    for (topics, message) in [
+        (vec![Topic::Orders], "Order 1042 accepted"),
+        (vec![Topic::Billing], "Invoice 1042 paid"),
+        (vec![Topic::Shipping], "Parcel 1042 dispatched"),
+        (vec![Topic::Orders, Topic::Shipping], "Order 1042 delivered"),
+        (
+            vec![Topic::Orders, Topic::Billing, Topic::Shipping],
+            "Order 1042 closed",
+        ),
+        (vec![], "System heartbeat"),
     ] {
         // Tracking waits for every selected receiver before continuing.
-        creator.create_marble(colors).await.unwrap();
+        bus.publish(topics, message.into()).await.unwrap();
     }
 
     let totals = (
-        red.total_received().await,
-        green.total_received().await,
-        blue.total_received().await,
-        red_or_blue.total_received().await,
+        orders.total_received().await,
+        billing.total_received().await,
+        shipping.total_received().await,
+        orders_or_shipping.total_received().await,
         observer.total_received().await,
     );
     assert_eq!(totals, (3, 2, 3, 4, 6));
     println!(
-        "Totals: Red: {}, Green: {}, Blue: {}, Red or blue: {}, All: {}",
+        "Totals: Orders: {}, Billing: {}, Shipping: {}, Orders or shipping: {}, All: {}",
         totals.0, totals.1, totals.2, totals.3, totals.4,
     );
 }

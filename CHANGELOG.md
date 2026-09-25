@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Prevent connection removal from running captured destructors under the event
+  mutex, avoiding deadlocks when destructors reenter the same signal.
+- Add a tested API guide, complete public/private doc comments, generated API
+  documentation, realistic examples, and CI/package/MSRV release checks.
+- Separate signal storage, backend contracts, lifecycle, and macro expansion
+  modules. Make the implementation-only `ShardRcId` and `ShardRcStore` private
+  and remove the unused store removal method before the initial release.
+- Keep Rust 1.85 compatibility for the core/default library; document Slint's
+  higher compiler requirement. Await tracked responses in the HTTP example.
+
 - Tie local `ShardRc::connect` subscriptions to the underlying value's lifetime,
   allowing constructors to discard connection tokens. Remote-handle and individual
   signal connections retain their explicitly managed lifetimes.

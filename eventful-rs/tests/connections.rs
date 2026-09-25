@@ -204,3 +204,42 @@ fn disconnect_stops_both_dispatch_paths_without_canceling_pending_delivery() {
         assert_eq!(block_on(delivery), Ok(()));
     }
 }
+
+/// Disconnect must release captures outside the event lock, for every token type.
+#[test]
+fn disconnect_allows_capture_destructors_to_reenter_the_event() {
+    struct Reenter(Event<()>);
+    impl Drop for Reenter {
+        fn drop(&mut self) {
+            self.0.add_connection(|()| {});
+        }
+    }
+    for kind in 0..4 {
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let event = Event::default();
+            let capture = Reenter(event.clone());
+            let connection = event.add_connection(move |()| {
+                let _ = &capture;
+            });
+            match kind {
+                0 => connection.disconnect(),
+                1 => drop(connection.scoped()),
+                _ => {
+                    let mut group = eventful_rs::ConnectionGroup::default();
+                    group.push(connection);
+                    if kind == 2 {
+                        group.disconnect();
+                    } else {
+                        drop(group.scoped());
+                    }
+                }
+            }
+            assert_eq!(event.connection_count(), 1);
+            done.send(()).unwrap();
+        });
+        finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("disconnect deadlocked");
+    }
+}

@@ -1,76 +1,64 @@
 # eventful-rs
 
-Thread-affine values, typed events, and asynchronous method dispatch for Rust.
-Values live on shards that own their queues, stores, and futures. Values can
-use `Rc`, `Cell`, and `RefCell` internally; thread-safe `ShardRcHandle<T>` values
-let other threads queue work on the owning shard.
+Is your Rust code too boring? Want to spice up your async cravings? Then let's make
+things a little more eventful! Add some events to your structs, connect that spaghetti
+and let the magic happen. (or make it explode, whatever works for you)
 
-Start with the [annotated producer/reporter example and guide](https://github.com/DreamLogics/eventful-rs#quick-start).
-The producer lives on a background shard and emits events to a reporter on the
-main-thread shard. It demonstrates when to use each API:
+This crate provides an event and async dispatch system for Rust, focused mostly on
+ergonomics rather than performance. (no, that doesn't mean performance is going to be shit)
+It is intended for applications that need a simple, safe, and flexible way to handle
+events and asynchronous method calls on values that might not live on the same thread.
 
-- `declare_shard!(pub Worker, runtime = std)` declares a marker and a lazy singleton.
-  `#[scope(shard = super::Worker)]` selects it for an inline module; paths resolve
-  inside that module. `#[eventful(shard = Worker)]` selects a shard for one type.
-  For a whole file, use `file_scope!(shard = Worker);` without a module wrapper.
-  Explicit type selections and enclosing scopes override the file default.
-- `Eventful::Shard` records the destination in the type. `T::spawn(factory).await?`
-  constructs a value there and returns `ShardRcHandle<T>`. The factory's captures
-  must be `Send`; the value may contain `Rc` or other non-`Send` state.
-- `#[sharded_main(Main)]` drives a marker declared with `runtime = main` or
-  `runtime = tokio_main`, then joins background shards. It supplies no implicit
-  default. Use `Marker::shard()` for backend lifecycle operations.
-- `Marker::bind_async` enforces matching affinity at compile time. Backend/handle
-  binding checks it at runtime. `DynamicShard` explicitly permits runtime selection
-  through `bind` / `bind_async`, without type-inferred `spawn` or `.into()`.
-- `ShardRc<T>::from(value)` binds locally without requiring `Send`; it panics
-  outside the designated shard. `ShardRcHandle<T>::from(value)` requires `Send`
-  and can block across threads. Prefer factory construction from async code.
-- `#[events]` defines a listener interface. Attach it to a source with
-  `#[eventful(ProducerEvents, shard = Worker)]`, implement it on a listener, and use
-  `producer.on_produce().connect(&reporter)` to dispatch on the listener's shard.
-- `#[with_label(LabelType)]` on an event method enables application-defined routing.
-  Implement `EventLabel::matches` and subscribe with
-  `signal.connect_labelled(&listener, label)`. Emitters take the emitted label
-  before handler arguments. Matching happens before payload cloning or shard
-  submission; ordinary and bulk connections receive every label. See the
-  [labelled events guide](https://github.com/DreamLogics/eventful-rs#labelled-events).
-- `source.connect(&listener)` connects all events in the source's interface and
-  returns a `ConnectionGroup`. Call `disconnect()` to remove the group or
-  `scoped()` to disconnect on drop. Plain group drops keep subscriptions active.
-  A local `ShardRc::connect` also retains the group with its underlying value and
-  disconnects on value destruction, so constructors can discard the token.
-  Remote handles keep explicitly managed lifetimes; weak handles return `None` if their
-  source event set has expired. Listeners must implement the full event interface.
-- `#[asynchronize]` generates handle wrappers. `#[asynced]` makes a wrapper async
-  even when the original method is synchronous. Awaiting it returns the method's
-  result; untracked events emitted by that method may still be pending.
-- Tracked emissions return futures that observe handler completion and errors.
-  The example's `produce_tracked` awaits them with `join_all`. It waits for every
-  delivery outcome but discards the results; inspect them to handle failures.
-- `#[action]` generates a normal handle method that queues work and returns
-  immediately. Calling `reset_count()` needs no async context or `.await`.
-- `upgrade_in_shard` queues a closure with a reference to a shard-local value
-  so it can call ordinary methods such as `internal_report`. The reference stays on the
-  owning shard. Use `deferred_upgrade_in_shard` to await a callback result.
-- `foo.join(&bar)` borrows strong handles and returns an owned `JoinedHandles`
-  group if their shard IDs match, otherwise `None`. Chain `.join(&baz)` for flat
-  tuples of up to eight handles, then upgrade them together in one callback.
+In concept, you have your stuff living on these little islands called shards. Each shard has its
+own thread and event loop. You can create values on a shard, and then call methods on those values
+from other shards. The calls are queued and executed on the shard's thread, and you can await the
+result of the call if you want. You can also connect events from a producer to a listener, and when
+an event is emitted, all connected listeners will receive the event on their own shard's thread.
 
-Dispatch arguments and results must be `Send + 'static`. Async callbacks can
-interleave with other work while suspended. Connections use weak targets;
-keep listener handles alive while the listeners are needed.
+A value can use `Rc`, `Cell`, or `RefCell` internally. Other threads communicate
+through a `ShardRcHandle<T>`; they never receive a reference to the value itself.
+A shard owns the queue, value store, and futures for its values.
 
-The default feature enables Tokio. Standard thread, calling-thread, and optional
-Slint backends share the same handle implementation. See the guide for backend
-selection, construction, delivery errors, and shutdown behavior.
+This is an early `0.1` API. It supports a standard thread executor, Tokio runtimes,
+and an optional Slint UI adapter. It is not a distributed actor system (yet?).
 
-Shard selections are mandatory. Scope inheritance covers directly written structs
-and nested inline modules; external module files select their own shards. Main/UI
-markers must be initialized on their owner thread before cross-thread submission.
-The destination loop must run to complete `spawn`. Named shards cannot restart.
+## Install
 
-The old `shard_std!`, `shard_tokio!`, `shard_main!`, `shard_tokio_main!`,
-`shard_slint!`, and `use_shard!` macros are replaced by declaration and selection.
-`Eventful::EventLoopHandleType` and `default_handle()` are replaced by `Shard`;
-backend handles still share `ShardEventHandle`.
+```toml
+[dependencies]
+eventful-rs = "0.1"
+```
+
+Rust 1.85+ for the core and default Tokio backend. Use `default-features = false`
+for the standard executor only; the optional `slint` adapter requires Rust 1.92+.
+
+## What it offers
+
+- **Thread-affine state:** keep `Rc`, `Cell`, and `RefCell` on their owning shard.
+- **Typed events:** connect listeners individually or by interface, with optional
+  application-defined routing labels and tracked delivery.
+- **Method dispatch:** await results or queue actions through generated handle methods.
+- **Explicit lifetimes:** strong/weak handles, scoped connections, and coordinated shutdown.
+- **Runtime choice:** dedicated threads, a main-thread loop, Tokio, or a Slint UI loop.
+
+See the [complete quick start and API documentation](https://docs.rs/eventful-rs)
+for the type definitions, delivery semantics, and lifecycle rules.
+
+## Examples
+
+| Run from this repository | Demonstrates |
+| --- | --- |
+| `cargo run -p sharded-main` | Batch processing, tracked events, actions, joined handles |
+| `cargo run -p no-main-shard-example` | A synchronous application with background shards |
+| `cargo run -p connect-all` | Whole-interface subscriptions and scoped cleanup |
+| `cargo run -p targeted-events` | Topic routing with wildcard observers |
+| `cargo run -p example_tokio` | HTTP I/O on Tokio with a main-thread listener |
+
+See [the example index](https://github.com/DreamLogics/eventful-rs/tree/main/examples)
+for coverage and [the release guide](https://github.com/DreamLogics/eventful-rs/blob/main/RELEASING.md)
+for development checks. Queues are unbounded and async operations may interleave;
+this library provides thread affinity, not transactional isolation.
+
+## License
+
+MIT. See [LICENSE](https://github.com/DreamLogics/eventful-rs/blob/main/LICENSE).

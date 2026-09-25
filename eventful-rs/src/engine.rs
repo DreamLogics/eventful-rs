@@ -1,11 +1,14 @@
+//! Common admission queue, dispatch, owner-thread storage, and shutdown driver.
+mod driver;
+pub(crate) use driver::drive;
+
 use crate::{
     EventLoopHandle, Eventful, HasEvents, ShardAffinity, ShardHandle, ShardId, ShardRc,
     ShardRcStore,
 };
 use futures::{
-    FutureExt, StreamExt,
+    FutureExt,
     channel::{mpsc, oneshot},
-    stream::FuturesUnordered,
 };
 use std::{
     cell::RefCell,
@@ -17,25 +20,32 @@ use std::{
     rc::Rc,
     sync::{Arc, Mutex},
     thread::{self, ThreadId},
-    time::Duration,
 };
 
+/// A future confined to the shard thread; it need not implement Send.
 pub(crate) type LocalFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
+/// A Send factory producing a local future after crossing the queue.
 type Job = Box<dyn FnOnce(Rc<RefCell<ShardRcStore>>) -> LocalFuture + Send + 'static>;
+/// Messages serialized through the admission queue.
 pub(crate) enum Command {
+    /// Construct and start one admitted operation on the owner thread.
     Job(Job),
+    /// Drain pending operations after all preceding jobs have started.
     Stop,
 }
+/// Single owner of the shard admission queue.
 pub(crate) type Receiver = mpsc::UnboundedReceiver<Command>;
 
 thread_local! {
     static STORES: RefCell<HashMap<ShardId, Rc<RefCell<ShardRcStore>>>> = RefCell::new(HashMap::new());
 }
 
+/// Whether this thread currently owns any shard stores.
 pub(crate) fn on_shard_thread() -> bool {
     STORES.with(|s| !s.borrow().is_empty())
 }
 
+/// Access or initialize the thread-local store for a shard identity.
 pub(crate) fn store(id: ShardId) -> Rc<RefCell<ShardRcStore>> {
     STORES.with(|s| {
         s.borrow_mut()
@@ -45,8 +55,10 @@ pub(crate) fn store(id: ShardId) -> Rc<RefCell<ShardRcStore>> {
     })
 }
 
+/// Removes a shard store on exit, dropping values outside the TLS borrow.
 pub(crate) struct ContextGuard(ShardId);
 impl ContextGuard {
+    /// Enter the shard context on this thread, creating its store if necessary.
     pub(crate) fn new(id: ShardId) -> Self {
         let _ = store(id);
         Self(id)
@@ -62,11 +74,15 @@ impl Drop for ContextGuard {
 /// A submission or deferred invocation failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvokeError {
+    /// The shard no longer accepts submissions.
     Closed,
+    /// The value or declared affinity belongs to another shard.
     WrongShard,
     /// The target value no longer exists in its shard's store.
     ValueMissing,
+    /// The callback or factory unwound. Mutations are not rolled back.
     Panicked,
+    /// The driver dropped the operation before returning its result.
     Canceled,
 }
 impl fmt::Display for InvokeError {
@@ -86,7 +102,9 @@ impl std::error::Error for InvokeError {}
 /// Only closures and value IDs cross threads; shard values and their futures do not.
 #[derive(Clone)]
 pub struct ShardEventHandle {
+    /// Stable identity used to validate affinity and look up the owner store.
     pub(crate) shard_id: ShardId,
+    /// Admission lock; taking the sender permanently closes new submissions.
     pub(crate) sender: Arc<Mutex<Option<mpsc::UnboundedSender<Command>>>>,
 }
 impl fmt::Debug for ShardEventHandle {
@@ -97,6 +115,7 @@ impl fmt::Debug for ShardEventHandle {
     }
 }
 impl ShardEventHandle {
+    /// Create an open submission handle and its sole receiver.
     pub(crate) fn channel() -> (Self, Receiver) {
         let (tx, rx) = mpsc::unbounded();
         (
@@ -107,6 +126,7 @@ impl ShardEventHandle {
             rx,
         )
     }
+    /// Serialize admission with shutdown; drop rejected captures outside the lock.
     pub(crate) fn post(&self, job: Job) -> Result<(), InvokeError> {
         let command = Command::Job(job);
         let result = {
@@ -129,6 +149,7 @@ impl ShardEventHandle {
             let _ = tx.unbounded_send(Command::Stop);
         }
     }
+    /// Whether admission has closed or the driver has stopped.
     pub fn is_closed(&self) -> bool {
         self.sender
             .lock()
@@ -136,6 +157,7 @@ impl ShardEventHandle {
             .as_ref()
             .is_none_or(|s| s.is_closed())
     }
+    /// Queue a synchronous callback, returning an admission error if closed.
     pub fn try_invoke<F>(&self, f: F) -> Result<(), InvokeError>
     where
         F: FnOnce() + Send + 'static,
@@ -146,6 +168,7 @@ impl ShardEventHandle {
             })
         }))
     }
+    /// Queue an async callback; its future is created and polled on the shard.
     pub fn try_invoke_async<F>(&self, f: F) -> Result<(), InvokeError>
     where
         F: AsyncFnOnce() -> () + Send + 'static,
@@ -156,6 +179,7 @@ impl ShardEventHandle {
             })
         }))
     }
+    /// Queue an existing Send future, returning an admission error if closed.
     pub fn try_spawn<F>(&self, f: F) -> Result<(), InvokeError>
     where
         F: Future + Send + 'static,
@@ -166,6 +190,8 @@ impl ShardEventHandle {
             })
         }))
     }
+    /// Queue a value callback, rejecting closed or mismatched shards.
+    /// A target that expires before execution is silently skipped.
     pub fn try_invoke_with_handle<T, H, F>(&self, handle: H, f: F) -> Result<(), InvokeError>
     where
         T: Eventful + HasEvents<T::EventSetType> + 'static,
@@ -188,6 +214,8 @@ impl ShardEventHandle {
             })
         }))
     }
+    /// Queue an async value callback, rejecting closed or mismatched shards.
+    /// A target that expires before execution is silently skipped.
     pub fn try_invoke_with_handle_async<T, H, F>(&self, handle: H, f: F) -> Result<(), InvokeError>
     where
         T: Eventful + HasEvents<T::EventSetType> + 'static,
@@ -281,6 +309,7 @@ impl ShardEventHandle {
             rx.await.map_err(|_| InvokeError::Canceled)?
         }
     }
+    /// Queue construction and synchronously wait for its result.
     pub(crate) fn bind_blocking_factory<F, R, T>(&self, f: F) -> Result<R, InvokeError>
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
@@ -302,6 +331,7 @@ impl ShardEventHandle {
         }))?;
         rx.recv().map_err(|_| InvokeError::Canceled)?
     }
+    /// Bind directly on the owner thread, otherwise use blocking dispatch.
     pub(crate) fn bind<F, R, T>(&self, owner: ThreadId, f: F) -> R
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
@@ -320,6 +350,7 @@ impl ShardEventHandle {
     }
 }
 
+/// Reject operations that would synchronously block a Tokio executor.
 pub(crate) fn assert_not_async(message: &str) {
     #[cfg(feature = "tokio")]
     assert!(
@@ -329,6 +360,7 @@ pub(crate) fn assert_not_async(message: &str) {
     let _ = message;
 }
 
+/// Validate affinity and expose a factory for registering local values.
 pub(crate) fn bind_here<F, R, T>(store: &RefCell<ShardRcStore>, handle: ShardEventHandle, f: F) -> R
 where
     F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R,
@@ -411,106 +443,7 @@ impl EventLoopHandle for ShardEventHandle {
     }
 }
 
-fn guarded(future: LocalFuture) -> LocalFuture {
-    Box::pin(async move {
-        if AssertUnwindSafe(future).catch_unwind().await.is_err() {
-            eprintln!("eventful-rs: shard callback panicked");
-        }
-    })
-}
-
-/// Remove first, then drop outside the RefCell borrow: destructors may bind values.
-fn collect(store: &RefCell<ShardRcStore>) {
-    let retired = store.borrow_mut().take_garbage();
-    drop(retired);
-}
-
-pub(crate) async fn drive(
-    mut rx: Receiver,
-    handle: ShardEventHandle,
-    grace: Duration,
-    initial: Option<LocalFuture>,
-) {
-    let context = store(handle.shard_id);
-    let mut pending = FuturesUnordered::<LocalFuture>::new();
-    if let Some(initial) = initial {
-        pending.push(guarded(initial));
-    }
-    let mut gc = futures_timer::Delay::new(Duration::from_millis(100)).fuse();
-    enum Next {
-        Command(Option<Command>),
-        Completed,
-        Collect,
-    }
-    let mut turns = 0usize;
-    loop {
-        turns += 1;
-        if turns == 64 {
-            turns = 0;
-            let mut yielded = false;
-            futures::future::poll_fn(|cx| {
-                if yielded {
-                    std::task::Poll::Ready(())
-                } else {
-                    yielded = true;
-                    cx.waker().wake_by_ref();
-                    std::task::Poll::Pending
-                }
-            })
-            .await;
-        }
-        let event = {
-            let next = async {
-                if pending.is_empty() {
-                    futures::future::pending::<Option<()>>().await
-                } else {
-                    pending.next().await
-                }
-            }
-            .fuse();
-            futures::pin_mut!(next);
-            futures::select! {
-                command = rx.next().fuse() => Next::Command(command),
-                _ = next => Next::Completed,
-                _ = gc => Next::Collect,
-            }
-        };
-        match event {
-            Next::Command(Some(Command::Job(job))) => {
-                let ctx = context.clone();
-                let mut future = guarded(Box::pin(async move {
-                    job(ctx).await;
-                }));
-                // Start in admission order. A Pending operation then interleaves
-                // with later work; a synchronous callback finishes right here.
-                let polled =
-                    futures::future::poll_fn(|cx| std::task::Poll::Ready(future.as_mut().poll(cx)))
-                        .await;
-                if polled.is_pending() {
-                    pending.push(future);
-                }
-            }
-            Next::Command(Some(Command::Stop) | None) => break,
-            Next::Completed => {}
-            Next::Collect => {
-                collect(&context);
-                gc = futures_timer::Delay::new(Duration::from_millis(100)).fuse();
-            }
-        }
-    }
-    rx.close();
-    {
-        let drain = async { while pending.next().await.is_some() {} }.fuse();
-        let deadline = futures_timer::Delay::new(grace).fuse();
-        futures::pin_mut!(drain, deadline);
-        futures::select! { _ = drain => {}, _ = deadline => {} }
-    }
-    // Drop canceled futures while the context is still on its owner thread.
-    drop(pending);
-    collect(&context);
-    handle.request_shutdown();
-}
-
+/// Whether this thread already contains the selected shard store.
 pub(crate) fn has_context(id: ShardId) -> bool {
     STORES.with(|s| s.borrow().contains_key(&id))
 }

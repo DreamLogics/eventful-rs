@@ -1,3 +1,4 @@
+//! Validated groups of strong handles for access on a shared shard.
 use super::{ShardHandleInternal, ShardRcHandle};
 use crate::{Eventful, HasEvents, InvokeError};
 use futures::{FutureExt, channel::oneshot};
@@ -13,6 +14,7 @@ use std::panic::AssertUnwindSafe;
 /// The returned group owns its handles. Only the built-in shard handle is supported.
 #[derive(Clone, Debug)]
 pub struct JoinedHandles<H> {
+    /// Owned strong handles, validated to share a shard at construction.
     handles: H,
 }
 
@@ -65,6 +67,7 @@ where
     }
 }
 
+/// Generate dispatch methods for a flat tuple of strong handles.
 macro_rules! joined_upgrades {
     ($($ty:ident : $value:ident),+) => {
         impl<$($ty),+> JoinedHandles<($(ShardRcHandle<$ty>,)+)>
@@ -154,6 +157,7 @@ macro_rules! joined_upgrades {
     };
 }
 
+/// Generate a checked append operation for one tuple arity.
 macro_rules! joined_extend {
     ($($ty:ident : $value:ident),+) => {
         impl<$($ty),+> JoinedHandles<($(ShardRcHandle<$ty>,)+)>
@@ -179,6 +183,7 @@ macro_rules! joined_extend {
     };
 }
 
+/// Instantiate supported tuple sizes without duplicating method implementations.
 macro_rules! joined_arities {
     ($first:ident : $first_value:ident, $($ty:ident : $value:ident),+) => {
         joined_upgrades!($first: $first_value, $($ty: $value),+);

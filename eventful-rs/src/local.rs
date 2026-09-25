@@ -1,13 +1,18 @@
 //! Calling-thread shard using executor-independent Rust futures.
 use crate::{EventLoop, Eventful, HasEvents, ShardError, ShardId, ShardRc};
 use std::future::Future;
+/// Submission handle for this backend.
 pub type LocalShardHandle = crate::ShardEventHandle;
 
+/// Single-use event loop driven on its constructing thread.
 pub struct LocalShard {
+    /// Shared implementation of the calling-thread driver.
     inner: crate::main_loop::MainLoop,
+    /// Identity of this shard.
     pub shard_id: ShardId,
 }
 impl LocalShard {
+    /// Create a single-use event loop bound to the current thread.
     pub fn new() -> Self {
         let inner = crate::main_loop::MainLoop::new(crate::background::Runtime::Standard);
         let shard_id = inner.handle.shard_id;
@@ -22,12 +27,16 @@ impl LocalShard {
     {
         self.inner.run_main(main)
     }
+    /// Drive until shutdown, once only, on the constructing thread and outside Tokio.
     pub fn run_event_loop(&self) {
         self.inner.run_event_loop()
     }
+    /// Reject new work and enqueue shutdown after previously accepted jobs.
     pub fn request_shutdown(&self) {
         self.handle().request_shutdown();
     }
+    /// Submit a construction factory immediately; await its result without blocking.
+    /// Returns an error for mismatched affinity, shutdown, cancellation, or a factory panic.
     pub fn bind_async<F, R, T>(
         &self,
         f: F,

@@ -6,9 +6,12 @@ declare_shard!(pub ProducerShard, runtime = std);
 declare_shard!(pub ReporterShard, runtime = std);
 file_scope!(shard = ProducerShard);
 
+/// All updates associated with a batch import.
 #[events]
 trait BatchEvents {
+    /// Human-readable device name.
     fn item(&self, name: String);
+    /// A batch has finished processing.
     fn finished(&self, count: usize);
 }
 
@@ -17,6 +20,7 @@ struct Producer;
 
 #[asynchronize]
 impl Producer {
+    /// Emit every item and completion, propagating delivery failures.
     #[asynced]
     async fn produce(&self, names: Vec<String>) -> Result<(), DeliveryError> {
         let count = names.len();
@@ -28,9 +32,12 @@ impl Producer {
 }
 
 // A listener can live on a different shard and use local, mutable state.
+/// Listener accumulating batch results on its owner thread.
 #[eventful(shard = ReporterShard)]
 struct Reporter {
+    /// Names accepted by the listener.
     names: RefCell<Vec<String>>,
+    /// Sizes of completed batches.
     batches: RefCell<Vec<usize>>,
 }
 
@@ -47,18 +54,21 @@ impl BatchEvents for Reporter {
 
 #[asynchronize]
 impl Reporter {
+    /// Read received item and batch counts.
     #[asynced]
     fn totals(&self) -> (usize, usize) {
         (self.names.borrow().len(), self.batches.borrow().len())
     }
 }
 
+/// Assert the expected projection after tracked delivery completes.
 async fn show_totals(reporter: &ShardRcHandle<Reporter>, label: &str, expected: (usize, usize)) {
     let totals = reporter.totals().await;
     assert_eq!(totals, expected);
     println!("{label}: {} items, {} batches", totals.0, totals.1);
 }
 
+/// Run the scenario and verify its observable results before shutting down.
 #[sharded_main(Main)]
 async fn main() -> Result<(), DeliveryError> {
     let producer = Producer::spawn(|| Producer {
