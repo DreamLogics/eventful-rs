@@ -87,13 +87,13 @@ Apply [`macro@asynchronize`] to an inherent implementation, then annotate method
 The generated extension trait is private by default; use `#[asynchronize(pub)]`
 or `#[asynchronize(pub(crate))]` when callers in other modules need it in scope:
 
-| API | Submission | Completion |
-| --- | --- | --- |
-| `#[asynced]` | When the handle's async method is polled | Returns the method result; panics on dispatch failure |
-| `#[action]` | Immediately, even from synchronous code | Returns immediately; method must return `()` |
-| [`ShardHandle::upgrade_in_shard`] | Immediately | Runs a closure with `&T`; no result |
-| [`ShardHandle::deferred_upgrade_in_shard`] | When polled | Awaits a closure's result; panics on failure |
-| [`ShardWeakHandle::try_deferred_upgrade_in_shard`] | Immediately | Returns `Result<R, InvokeError>` |
+| API                                                | Submission                               | Completion                                            |
+| -------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------- |
+| `#[asynced]`                                       | When the handle's async method is polled | Returns the method result; panics on dispatch failure |
+| `#[action]`                                        | Immediately, even from synchronous code  | Returns immediately; method must return `()`          |
+| [`ShardHandle::upgrade_in_shard`]                  | Immediately                              | Runs a closure with `&T`; no result                   |
+| [`ShardHandle::deferred_upgrade_in_shard`]         | When polled                              | Awaits a closure's result; panics on failure          |
+| [`ShardWeakHandle::try_deferred_upgrade_in_shard`] | Immediately                              | Returns `Result<R, InvokeError>`                      |
 
 Original methods can be synchronous or async. Arguments, captured state, and
 returned values crossing threads must be `Send + 'static`. The callback's future
@@ -164,13 +164,13 @@ untracked emission propagates them.
 
 ## Backends and features
 
-| Runtime in `declare_shard!` | Backend | Feature |
-| --- | --- | --- |
-| `std` | [`shard::Shard`], dedicated thread | None |
-| `main` | [`local::LocalShard`], calling thread | None |
-| `tokio` | `tokio::TokioShard`, dedicated thread with timers and I/O | `tokio` (default) |
-| `tokio_main` | `tokio_local::TokioLocalShard`, calling thread with Tokio | `tokio` |
-| `slint` | `slint::SlintShard`, application UI loop | `slint` |
+| Runtime in `declare_shard!` | Backend                                                   | Feature           |
+| --------------------------- | --------------------------------------------------------- | ----------------- |
+| `std`                       | [`shard::Shard`], dedicated thread                        | None              |
+| `main`                      | [`local::LocalShard`], calling thread                     | None              |
+| `tokio`                     | `tokio::TokioShard`, dedicated thread with timers and I/O | `tokio` (default) |
+| `tokio_main`                | `tokio_local::TokioLocalShard`, calling thread with Tokio | `tokio`           |
+| `slint`                     | `slint::SlintShard`, application UI loop                  | `slint`           |
 
 Disable default features for executor-independent futures only. Core and Tokio
 support Rust 1.85; Slint 1.18 requires Rust 1.92 or newer. An application must
@@ -191,8 +191,7 @@ applications should limit outstanding work.
 
 Strong handles retain values while the shard runs. Garbage collection periodically
 retires unused values on their owner thread. Shutdown destroys the store even if
-handles remain. Local references stay on their owner thread; use handles for
-cross-thread access. Applications using this library may use unsafe Rust.
+handles remain. Local references stay on their owner thread; use handles for cross-thread access.
 
 `request_shutdown()` rejects new work immediately and queues shutdown behind
 accepted jobs. Outstanding futures then get a five-second grace period
