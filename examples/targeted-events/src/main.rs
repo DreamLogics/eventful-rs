@@ -1,25 +1,51 @@
+//! Route marbles across shards using application-defined bitmask labels.
+//!
+//! A subscription accepts any marble whose colors overlap its mask. The library
+//! checks that rule before queuing a callback; receivers never filter payloads.
 eventful_rs::declare_shard!(pub Main, runtime = main);
 use eventful_rs::*;
-use rand::prelude::*;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 enum Color {
     Red,
     Green,
     Blue,
 }
 
+/// One routing label can describe several colors without multi-label API support.
+struct ColorMask(u8);
+
+impl ColorMask {
+    const RED: Self = Self(1);
+    const GREEN: Self = Self(2);
+    const BLUE: Self = Self(4);
+
+    fn from_colors(colors: &[Color]) -> Self {
+        Self(colors.iter().fold(0, |mask, color| {
+            mask | match color {
+                Color::Red => Self::RED.0,
+                Color::Green => Self::GREEN.0,
+                Color::Blue => Self::BLUE.0,
+            }
+        }))
+    }
+}
+
+impl EventLabel for ColorMask {
+    /// Accept any overlap. Applications could instead require every subscribed bit.
+    fn matches(&self, emitted: &Self) -> bool {
+        self.0 & emitted.0 != 0
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Marble {
-    pub colors: Vec<Color>,
+    colors: Vec<Color>,
 }
 
-trait ColoredListener {
-    fn my_color(&self) -> Color;
-}
-
-#[events(ColoredListener)]
+#[events]
 trait MarbleCreatorEvents {
+    #[with_label(ColorMask)]
     fn on_create_marble(&self, marble: Marble);
 }
 
@@ -27,38 +53,11 @@ trait MarbleCreatorEvents {
 struct MarbleCreator;
 
 impl MarbleCreator {
-    pub fn new() -> ShardRc<Self> {
-        Self {
-            events: Default::default(),
-        }
-        .into()
-    }
-
-    pub fn create_marble(&self) {
-        // Create a marble with a random number of colors
-        let mut rng = rand::rng();
-        let r: u8 = rng.random();
-        let nr_of_colors = match r {
-            0..100 => 1,
-            100..160 => 2,
-            160..200 => 3,
-            200..220 => 4,
-            220..230 => 5,
-            _ => 6,
-        };
-
-        let mut colors: Vec<Color> = Vec::new();
-        for _ in 0..nr_of_colors {
-            let color = match rng.random::<u8>() % 3 {
-                0 => Color::Red,
-                1 => Color::Green,
-                _ => Color::Blue,
-            };
-            colors.push(color);
-        }
-
-        let marble = Marble { colors };
-        self.emit_on_create_marble(marble);
+    /// The label is supplied at emission and is not part of the handler signature.
+    async fn create_marble(&self, colors: Vec<Color>) -> Result<(), DeliveryError> {
+        let label = ColorMask::from_colors(&colors);
+        self.emit_on_create_marble_tracked(label, Marble { colors })
+            .await
     }
 }
 
@@ -71,15 +70,15 @@ mod marbles {
 
     #[eventful]
     pub struct MarbleReceiver {
-        color: Color,
+        name: &'static str,
         received_marbles: RefCell<Vec<Marble>>,
     }
 
     #[asynchronize]
     impl MarbleReceiver {
-        pub async fn new(color: Color) -> Result<ShardRcHandle<Self>, InvokeError> {
+        pub async fn new(name: &'static str) -> Result<ShardRcHandle<Self>, InvokeError> {
             Self::spawn(move || Self {
-                color,
+                name,
                 received_marbles: RefCell::new(Vec::new()),
                 events: Default::default(),
             })
@@ -94,19 +93,9 @@ mod marbles {
 
     impl MarbleCreatorEvents for MarbleReceiver {
         fn on_create_marble(&self, marble: Marble) {
-            if marble.colors.contains(&self.color) {
-                println!(
-                    "Receiver {:?} received marble with colors: {:?}",
-                    self.color, marble.colors
-                );
-                self.received_marbles.borrow_mut().push(marble);
-            }
-        }
-    }
-
-    impl ColoredListener for MarbleReceiver {
-        fn my_color(&self) -> Color {
-            self.color
+            // No color check: only matching emissions reach this handler.
+            println!("{} received {:?}", self.name, marble.colors);
+            self.received_marbles.borrow_mut().push(marble);
         }
     }
 }
@@ -114,32 +103,56 @@ mod marbles {
 #[sharded_main(Main)]
 async fn main() {
     use marbles::*;
-    let red_receiver = MarbleReceiver::new(Color::Red).await.unwrap();
-    let green_receiver = MarbleReceiver::new(Color::Green).await.unwrap();
-    let blue_receiver = MarbleReceiver::new(Color::Blue).await.unwrap();
-
-    let creator = MarbleCreator::new();
+    let red = MarbleReceiver::new("Red").await.unwrap();
+    let green = MarbleReceiver::new("Green").await.unwrap();
+    let blue = MarbleReceiver::new("Blue").await.unwrap();
+    let red_or_blue = MarbleReceiver::new("Red or blue").await.unwrap();
+    let observer = MarbleReceiver::new("All marbles").await.unwrap();
+    let creator: ShardRc<MarbleCreator> = MarbleCreator {
+        events: Default::default(),
+    }
+    .into();
 
     creator
         .on_create_marble()
-        .connect_filtered(&red_receiver, |t| t.my_color() == Color::Red);
+        .connect_labelled(&red, ColorMask::RED);
     creator
         .on_create_marble()
-        .connect_filtered(&green_receiver, |t| t.my_color() == Color::Green);
+        .connect_labelled(&green, ColorMask::GREEN);
     creator
         .on_create_marble()
-        .connect_filtered(&blue_receiver, |t| t.my_color() == Color::Blue);
+        .connect_labelled(&blue, ColorMask::BLUE);
+    creator.on_create_marble().connect_labelled(
+        &red_or_blue,
+        ColorMask(ColorMask::RED.0 | ColorMask::BLUE.0),
+    );
+    // An ordinary connection is a wildcard, including for an empty color mask.
+    creator.on_create_marble().connect(&observer);
 
-    for _ in 0..100 {
-        creator.create_marble();
+    // Deterministic cases show overlap, a nonmatch, and an empty label. A red/blue
+    // marble reaches the combined subscriber once, even though both bits match.
+    for colors in [
+        vec![Color::Red],
+        vec![Color::Green],
+        vec![Color::Blue],
+        vec![Color::Red, Color::Blue],
+        vec![Color::Red, Color::Green, Color::Blue],
+        vec![],
+    ] {
+        // Tracking waits for every selected receiver before continuing.
+        creator.create_marble(colors).await.unwrap();
     }
 
-    let total_received_red = red_receiver.total_received().await;
-    let total_received_green = green_receiver.total_received().await;
-    let total_received_blue = blue_receiver.total_received().await;
-
+    let totals = (
+        red.total_received().await,
+        green.total_received().await,
+        blue.total_received().await,
+        red_or_blue.total_received().await,
+        observer.total_received().await,
+    );
+    assert_eq!(totals, (3, 2, 3, 4, 6));
     println!(
-        "Total received marbles: Red: {}, Green: {}, Blue: {}",
-        total_received_red, total_received_green, total_received_blue
+        "Totals: Red: {}, Green: {}, Blue: {}, Red or blue: {}, All: {}",
+        totals.0, totals.1, totals.2, totals.3, totals.4,
     );
 }

@@ -276,23 +276,65 @@ type TrackedTaskFn<Args> = dyn Fn(Args) -> futures::future::BoxFuture<'static, R
     + Sync
     + 'static;
 
-struct EventConnectionRecord<Args> {
+/// Routing metadata for a labelled event.
+///
+/// `subscription.matches(&emitted)` is evaluated on the emitting thread before
+/// cloning arguments or scheduling the receiver. Matching need not be symmetric
+/// or use equality: labels can represent masks, ranges, or application rules.
+/// Implementations should be fast and free of side effects. Concurrent emissions
+/// may call this method concurrently. Arbitrary matching requires scanning labels.
+/// Labels are not passed to event handlers and need not implement `Clone` or `Eq`.
+///
+/// ```
+/// use eventful_rs::{events, EventLabel};
+///
+/// struct Topics(u8);
+/// impl EventLabel for Topics {
+///     fn matches(&self, emitted: &Self) -> bool {
+///         self.0 & emitted.0 != 0
+///     }
+/// }
+///
+/// #[events]
+/// trait Updates {
+///     #[with_label(Topics)]
+///     fn changed(&self, value: String);
+/// }
+/// ```
+pub trait EventLabel: Send + Sync + 'static {
+    /// Whether this subscription accepts the emitted label.
+    fn matches(&self, emitted: &Self) -> bool;
+}
+
+impl EventLabel for () {
+    fn matches(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+struct EventConnectionRecord<Args, Label> {
     id: usize,
+    label: Option<Label>,
     emit: Arc<TaskFn<Args>>,
     tracked: Arc<TrackedTaskFn<Args>>,
 }
 
-struct EventInternal<Args> {
-    connections: Mutex<Vec<Arc<EventConnectionRecord<Args>>>>,
+struct EventInternal<Args, Label> {
+    connections: Mutex<Vec<Arc<EventConnectionRecord<Args, Label>>>>,
     last_id: Mutex<usize>,
 }
 
-/// Type-erased connection storage for one signal signature.
-pub struct Event<Args> {
-    internal: Arc<EventInternal<Args>>,
+/// Type-erased connection storage for one signal signature and optional label type.
+///
+/// `Event<Args>` retains unlabelled emission. `Event<Args, Label>` routes using
+/// [`EventLabel`] through [`Self::emit_labelled`] and [`Self::emit_labelled_tracked`].
+/// Wildcard subscriptions created with [`Self::add_connection`] or
+/// [`Self::add_tracked_connection`] receive every emission.
+pub struct Event<Args, Label = ()> {
+    internal: Arc<EventInternal<Args, Label>>,
 }
 
-impl<Args> Clone for Event<Args> {
+impl<Args, Label> Clone for Event<Args, Label> {
     fn clone(&self) -> Self {
         Self {
             internal: self.internal.clone(),
@@ -300,7 +342,7 @@ impl<Args> Clone for Event<Args> {
     }
 }
 
-impl<Args> Default for Event<Args> {
+impl<Args, Label> Default for Event<Args, Label> {
     fn default() -> Self {
         Self {
             internal: Arc::new(EventInternal {
@@ -311,11 +353,12 @@ impl<Args> Default for Event<Args> {
     }
 }
 
-impl<Args> Event<Args>
+impl<Args, Label> Event<Args, Label>
 where
     Args: Clone + Send + 'static,
+    Label: EventLabel,
 {
-    pub fn add_connection<F>(&self, connection: F) -> Connection<Args>
+    pub fn add_connection<F>(&self, connection: F) -> Connection<Args, Label>
     where
         F: Fn(Args) + Send + Sync + 'static,
     {
@@ -333,7 +376,26 @@ where
     /// Register ordinary dispatch and tracked dispatch for the same connection.
     /// Tracked dispatch must submit work immediately; its returned future observes
     /// completion. Dropping that future should not cancel the submitted work.
-    pub fn add_tracked_connection<F, G, Fut>(&self, emit: F, tracked: G) -> Connection<Args>
+    pub fn add_tracked_connection<F, G, Fut>(&self, emit: F, tracked: G) -> Connection<Args, Label>
+    where
+        F: Fn(Args) + Send + Sync + 'static,
+        G: Fn(Args) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), DeliveryError>> + Send + 'static,
+    {
+        self.add_labelled_tracked_connection(None, emit, tracked)
+    }
+
+    /// Register a subscription and its ordinary and tracked delivery callbacks.
+    /// `None` subscribes to every emission; `Some(label)` matches on the emitting
+    /// thread before arguments are cloned or delivery callbacks are invoked.
+    /// Matching runs outside the connection lock. Labels need not be `Clone`.
+    /// Tracked callbacks must submit immediately, as in `add_tracked_connection`.
+    pub fn add_labelled_tracked_connection<F, G, Fut>(
+        &self,
+        label: Option<Label>,
+        emit: F,
+        tracked: G,
+    ) -> Connection<Args, Label>
     where
         F: Fn(Args) + Send + Sync + 'static,
         G: Fn(Args) -> Fut + Send + Sync + 'static,
@@ -348,16 +410,26 @@ where
             .unwrap()
             .push(Arc::new(EventConnectionRecord {
                 id,
+                label,
                 emit: Arc::new(emit),
                 tracked: Arc::new(move |args| Box::pin(tracked(args))),
             }));
         Connection::new(id, self.internal.clone())
     }
 
-    pub fn emit(&self, args: Args) {
+    /// Dispatch only to wildcard and matching subscriptions, once per connection.
+    /// Matching scans a connection snapshot and calls `subscription.matches(&label)`
+    /// on the emitting thread. A matching panic propagates to the caller.
+    pub fn emit_labelled(&self, label: Label, args: Args) {
         let snapshot = self.internal.connections.lock().unwrap().clone();
         for connection in snapshot {
-            (connection.emit)(args.clone());
+            if connection
+                .label
+                .as_ref()
+                .is_none_or(|subscription| subscription.matches(&label))
+            {
+                (connection.emit)(args.clone());
+            }
         }
     }
 
@@ -366,24 +438,41 @@ where
     /// deliveries settle; an empty event succeeds. Panics are reported as errors.
     /// Dropping the returned future does not cancel submitted shard deliveries.
     /// Plain `add_connection` callbacks are complete when they return; work they
-    /// independently spawn is not tracked.
-    pub fn emit_tracked(
+    /// independently spawn is not tracked. Rejected subscriptions are successful
+    /// skips, even when their destination shard is closed. Matching panics are
+    /// reported as `DeliveryError::Panicked`; other connections are still processed.
+    pub fn emit_labelled_tracked(
         &self,
+        label: Label,
         args: Args,
-    ) -> impl Future<Output = Result<(), DeliveryError>> + Send + 'static + use<Args> {
+    ) -> impl Future<Output = Result<(), DeliveryError>> + Send + 'static + use<Args, Label> {
         use futures::FutureExt;
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
         let snapshot = self.internal.connections.lock().unwrap().clone();
         let mut deliveries = Vec::with_capacity(snapshot.len());
         for connection in snapshot {
-            let delivery = catch_unwind(AssertUnwindSafe(|| (connection.tracked)(args.clone())));
+            let delivery = catch_unwind(AssertUnwindSafe(|| {
+                if connection
+                    .label
+                    .as_ref()
+                    .is_none_or(|subscription| subscription.matches(&label))
+                {
+                    Some((connection.tracked)(args.clone()))
+                } else {
+                    None
+                }
+            }));
+            if matches!(delivery, Ok(None)) {
+                continue;
+            }
             deliveries.push(async move {
                 match delivery {
-                    Ok(future) => AssertUnwindSafe(future)
+                    Ok(Some(future)) => AssertUnwindSafe(future)
                         .catch_unwind()
                         .await
                         .unwrap_or(Err(DeliveryError::Panicked)),
+                    Ok(None) => Ok(()),
                     Err(_) => Err(DeliveryError::Panicked),
                 }
             });
@@ -398,6 +487,22 @@ where
 
     pub fn connection_count(&self) -> usize {
         self.internal.connections.lock().unwrap().len()
+    }
+}
+
+impl<Args: Clone + Send + 'static> Event<Args> {
+    /// Dispatch an unlabelled event to a snapshot of its connections.
+    pub fn emit(&self, args: Args) {
+        self.emit_labelled((), args);
+    }
+
+    /// Dispatch immediately and observe completion of all snapshot deliveries.
+    /// Panics are reported as errors; dropping the future does not cancel delivery.
+    pub fn emit_tracked(
+        &self,
+        args: Args,
+    ) -> impl Future<Output = Result<(), DeliveryError>> + Send + 'static + use<Args> {
+        self.emit_labelled_tracked((), args)
     }
 }
 

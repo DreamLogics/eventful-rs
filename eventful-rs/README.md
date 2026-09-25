@@ -29,6 +29,12 @@ main-thread shard. It demonstrates when to use each API:
 - `#[events]` defines a listener interface. Attach it to a source with
   `#[eventful(ProducerEvents, shard = Worker)]`, implement it on a listener, and use
   `producer.on_produce().connect(&reporter)` to dispatch on the listener's shard.
+- `#[with_label(LabelType)]` on an event method enables application-defined routing.
+  Implement `EventLabel::matches` and subscribe with
+  `signal.connect_labelled(&listener, label)`. Emitters take the emitted label
+  before handler arguments. Matching happens before payload cloning or shard
+  submission; ordinary and bulk connections receive every label. See the
+  [labelled events guide](https://github.com/DreamLogics/eventful-rs#labelled-events).
 - `source.connect(&listener)` connects all events in the source's interface and
   returns a `ConnectionGroup`. Call `disconnect()` to remove the group or
   `scoped()` to disconnect on drop. Plain group drops keep subscriptions active.

@@ -472,6 +472,54 @@ For manually constructed `Event` values, `add_connection` tracks completion of t
 callback itself. Use `add_tracked_connection` to supply separate ordinary and
 tracked dispatch callbacks when completion needs to be observed asynchronously.
 
+
+### Labelled events
+
+Mark individual event methods with `#[with_label(LabelType)]`. The label type
+implements `EventLabel`; each subscription decides whether it accepts an emitted
+label. Handler arguments remain unchanged:
+
+```rust
+use eventful_rs::*;
+
+struct ColorMask(u8);
+impl EventLabel for ColorMask {
+    fn matches(&self, emitted: &Self) -> bool {
+        self.0 & emitted.0 != 0
+    }
+}
+
+#[events]
+trait MarbleEvents {
+    #[with_label(ColorMask)]
+    fn created(&self, description: String);
+}
+```
+
+Connect using `creator.created().connect_labelled(&receiver, ColorMask(1))`.
+An ordinary `connect(&receiver)`, including a bulk connection, subscribes to all
+labels. Emit with `creator.emit_created(ColorMask(3), description)` or await
+`creator.emit_created_tracked(ColorMask(3), description)`. The signal's `emit` and
+`emit_tracked` methods likewise take the label first. Labelled signals always
+require emission metadata; methods without the annotation retain their existing API.
+
+Matching calls `subscription.matches(&emitted)` on the emitting thread, outside
+the connection lock, before cloning payloads or queuing receiver work. Rules can
+be asymmetric and need not use equality. Labels require `Send + Sync + 'static`,
+but not `Clone`, `Eq`, or `Hash`. Arbitrary matching scans subscriptions; it does
+not provide indexed lookup. Each matching connection receives one delivery,
+regardless of how many bits overlap. Independent connections remain independent.
+
+Tracked emissions wait only for selected deliveries; no matches succeeds.
+A matching panic becomes `DeliveryError::Panicked` and other subscriptions are
+still processed. Ordinary emissions propagate matching panics. Connection
+snapshots, weak receiver ownership, disconnect, and scoped guards retain their
+usual semantics, including already queued deliveries surviving disconnection.
+
+Run `cargo run -p targeted-events` for a complete bitmask example with single-color,
+combined-color, and wildcard subscriptions across shards.
+
+
 ## Actions and return values
 
 Put `#[asynchronize]` on a non-generic inherent `impl`:

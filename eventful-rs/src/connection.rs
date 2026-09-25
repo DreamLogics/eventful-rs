@@ -6,14 +6,14 @@ use crate::EventInternal;
 /// and a listener. It can be used to disconnect the listener from the event.
 /// Dropping a Connection instance will not automatically disconnect the listener,
 /// you may use the `scoped` method to create a ScopedConnection if this is desired.
-#[derive(Clone)]
-pub struct Connection<Args> {
+/// `Label` is the signal routing type; it defaults to `()` for unlabelled events.
+pub struct Connection<Args, Label = ()> {
     id: usize,
-    event: Arc<EventInternal<Args>>,
+    event: Arc<EventInternal<Args, Label>>,
 }
 
-impl<Args> Connection<Args> {
-    pub(crate) fn new(id: usize, event: Arc<EventInternal<Args>>) -> Self {
+impl<Args, Label> Connection<Args, Label> {
+    pub(crate) fn new(id: usize, event: Arc<EventInternal<Args, Label>>) -> Self {
         Self { id, event }
     }
 
@@ -26,7 +26,7 @@ impl<Args> Connection<Args> {
 
     /// Creates a ScopedConnection instance that will automatically disconnect
     /// the listener from the event when it is dropped.
-    pub fn scoped(self) -> ScopedConnection<Args> {
+    pub fn scoped(self) -> ScopedConnection<Args, Label> {
         ScopedConnection::new(self.id, self.event.clone())
     }
 }
@@ -35,19 +35,18 @@ impl<Args> Connection<Args> {
 /// and a listener. It can be used to disconnect the listener from the event.
 /// Dropping a ScopedConnection instance will automatically disconnect
 /// the listener from the event.
-#[derive(Clone)]
-pub struct ScopedConnection<Args> {
+pub struct ScopedConnection<Args, Label = ()> {
     id: usize,
-    event: Arc<EventInternal<Args>>,
+    event: Arc<EventInternal<Args, Label>>,
 }
 
-impl<Args> ScopedConnection<Args> {
-    pub(crate) fn new(id: usize, event: Arc<EventInternal<Args>>) -> Self {
+impl<Args, Label> ScopedConnection<Args, Label> {
+    pub(crate) fn new(id: usize, event: Arc<EventInternal<Args, Label>>) -> Self {
         Self { id, event }
     }
 }
 
-impl<Args> Drop for ScopedConnection<Args> {
+impl<Args, Label> Drop for ScopedConnection<Args, Label> {
     fn drop(&mut self) {
         let mut connections = self.event.connections.lock().unwrap();
         connections.retain(|c| c.id != self.id);
@@ -65,7 +64,10 @@ pub struct ConnectionGroup {
 
 impl ConnectionGroup {
     /// Add an individual connection to the group.
-    pub fn push<Args: 'static>(&mut self, connection: Connection<Args>) {
+    pub fn push<Args: 'static, Label: Send + Sync + 'static>(
+        &mut self,
+        connection: Connection<Args, Label>,
+    ) {
         self.disconnectors.push(Arc::new(move || {
             let mut connections = connection.event.connections.lock().unwrap();
             connections.retain(|c| c.id != connection.id);
@@ -107,4 +109,22 @@ where
     T: crate::Eventful + crate::HasEvents<T::EventSetType> + 'static,
 {
     fn connect_events<S: crate::Sharded<T>>(&self, target: &S) -> ConnectionGroup;
+}
+
+impl<Args, Label> Clone for Connection<Args, Label> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            event: self.event.clone(),
+        }
+    }
+}
+
+impl<Args, Label> Clone for ScopedConnection<Args, Label> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            event: self.event.clone(),
+        }
+    }
 }

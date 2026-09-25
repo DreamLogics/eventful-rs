@@ -1,0 +1,71 @@
+error[E0599]: the method `emit_labelled_tracked` exists for struct `Event<(), Label>`, but its trait bounds were not satisfied
+ --> tests/ui/invalid_event_label.rs:5:1
+  |
+3 | struct Label;
+  | ------------ doesn't satisfy `Label: EventLabel`
+4 |
+5 | #[events]
+  | ^^^^^^^^^ method cannot be called on `Event<(), Label>` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `Label: EventLabel`
+note: the trait `EventLabel` must be implemented
+ --> src/lib.rs
+  |
+  | pub trait EventLabel: Send + Sync + 'static {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: this error originates in the attribute macro `events` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `add_tracked_connection` exists for struct `Event<(), Label>`, but its trait bounds were not satisfied
+ --> tests/ui/invalid_event_label.rs:5:1
+  |
+3 | struct Label;
+  | ------------ doesn't satisfy `Label: EventLabel`
+4 |
+5 | #[events]
+  | ^^^^^^^^^ method cannot be called on `Event<(), Label>` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `Label: EventLabel`
+note: the trait `EventLabel` must be implemented
+ --> src/lib.rs
+  |
+  | pub trait EventLabel: Send + Sync + 'static {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: this error originates in the attribute macro `events` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `add_labelled_tracked_connection` exists for struct `Event<(), Label>`, but its trait bounds were not satisfied
+ --> tests/ui/invalid_event_label.rs:5:1
+  |
+3 | struct Label;
+  | ------------ doesn't satisfy `Label: EventLabel`
+4 |
+5 | #[events]
+  | ^^^^^^^^^ method cannot be called on `Event<(), Label>` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `Label: EventLabel`
+note: the trait `EventLabel` must be implemented
+ --> src/lib.rs
+  |
+  | pub trait EventLabel: Send + Sync + 'static {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: this error originates in the attribute macro `events` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `emit_labelled` exists for struct `Event<(), Label>`, but its trait bounds were not satisfied
+ --> tests/ui/invalid_event_label.rs:5:1
+  |
+3 | struct Label;
+  | ------------ doesn't satisfy `Label: EventLabel`
+4 |
+5 | #[events]
+  | ^^^^^^^^^ method cannot be called on `Event<(), Label>` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `Label: EventLabel`
+note: the trait `EventLabel` must be implemented
+ --> src/lib.rs
+  |
+  | pub trait EventLabel: Send + Sync + 'static {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: this error originates in the attribute macro `events` (in Nightly builds, run with -Z macro-backtrace for more info)

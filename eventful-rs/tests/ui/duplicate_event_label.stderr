@@ -1,0 +1,5 @@
+error: duplicate with_label attribute
+ --> tests/ui/duplicate_event_label.rs:6:5
+  |
+6 |     #[with_label(())]
+  |     ^^^^^^^^^^^^^^^^^

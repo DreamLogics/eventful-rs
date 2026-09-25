@@ -16,6 +16,14 @@ use syn::{
 /// listeners. `source.event_name().connect(&listener)` dispatches callbacks on
 /// each listener's shard. Ordinary emissions do not wait for listeners; tracked
 /// emissions return a future that observes completion and delivery errors.
+///
+/// Mark individual methods with `#[with_label(LabelType)]` to enable routing.
+/// The type must implement `eventful_rs::EventLabel`. Generated emitters take
+/// the label first, followed by the declared arguments; handler signatures stay
+/// unchanged. `signal.connect_labelled(&listener, subscription)` delivers only
+/// when `subscription.matches(&emitted)` returns true. Ordinary `connect` and
+/// bulk connections subscribe to every label. Matching occurs on the emitting
+/// thread before cloning arguments or submitting work to the receiver's shard.
 #[proc_macro_attribute]
 pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
     let event_trait: Option<syn::Path> = if attr.is_empty() {
@@ -23,7 +31,7 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         Some(parse_macro_input!(attr as syn::Path))
     };
-    let trait_item = parse_macro_input!(item as ItemTrait);
+    let mut trait_item = parse_macro_input!(item as ItemTrait);
     if !trait_item.generics.params.is_empty() {
         return syn::Error::new_spanned(
             &trait_item.generics,
@@ -67,6 +75,30 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             return error.to_compile_error().into();
         }
     }
+    let mut labels = Vec::new();
+    for item in &mut trait_item.items {
+        let TraitItem::Fn(method) = item else {
+            unreachable!()
+        };
+        let mut label = None;
+        for attr in &method.attrs {
+            if attr.path().is_ident("with_label") {
+                if label.is_some() {
+                    return syn::Error::new_spanned(attr, "duplicate with_label attribute")
+                        .to_compile_error()
+                        .into();
+                }
+                match attr.parse_args::<Type>() {
+                    Ok(ty) => label = Some(ty),
+                    Err(error) => return error.to_compile_error().into(),
+                }
+            }
+        }
+        method
+            .attrs
+            .retain(|attr| !attr.path().is_ident("with_label"));
+        labels.push(label);
+    }
     let trait_name = &trait_item.ident;
     let set_name = format_ident!("{}EventSet", trait_name);
     let ext_signals_name = format_ident!("{}SignalsExt", trait_name);
@@ -82,7 +114,6 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             let method_name = &method.sig.ident;
             let signal_name =
                 format_ident!("{}{}Signal", trait_name, pascal(&method_name.to_string()));
-            //let emit_name = format_ident!("emit_{}", method_name);
 
             let mut names = Vec::new();
             let mut types = Vec::<Type>::new();
@@ -101,13 +132,7 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             }
-            Some(Ok((
-                method_name.clone(),
-                signal_name,
-                //emit_name,
-                names,
-                types,
-            )))
+            Some(Ok((method_name.clone(), signal_name, names, types)))
         })
         .collect::<Result<Vec<_>, syn::Error>>();
 
@@ -121,7 +146,7 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut extension_signal_methods = Vec::new();
     let mut extension_emitter_methods = Vec::new();
 
-    for (method_name, signal_name, /*emit_name, */ arg_names, arg_types) in &methods {
+    for ((method_name, signal_name, arg_names, arg_types), label) in methods.iter().zip(&labels) {
         let target_ident = fresh_target(arg_names);
         let emit_tracked_name = format_ident!("emit_{}_tracked", method_name);
         let emit_name = format_ident!("emit_{}", method_name);
@@ -144,9 +169,44 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
                         + 'static
             }
         };
+        let label_type = label.as_ref().map(|ty| quote!(#ty)).unwrap_or(quote!(()));
+        let mut reserved = arg_names.clone();
+        reserved.push(target_ident.clone());
+        let label_ident = fresh_target(&reserved);
+        let label_param = label.as_ref().map(|ty| quote!(#label_ident: #ty,));
+        let label_arg = label.as_ref().map(|_| quote!(#label_ident,));
+        let dispatch_label = if label.is_some() {
+            quote!(#label_ident)
+        } else {
+            quote!(())
+        };
+        let labelled_connect = label.as_ref().map(|ty| quote! {
+            /// Subscribe using `subscription.matches(&emitted)` before queuing delivery.
+            /// The receiver is held weakly. Dropping the connection keeps it active;
+            /// use `disconnect` or `scoped` to remove the subscription.
+            pub fn connect_labelled<T, S>(&self, target: &S, label: #ty)
+                -> ::eventful_rs::Connection<(#(#arg_types,)*), #ty>
+            where
+                T: #trait_bound,
+                S: ::eventful_rs::Sharded<T>,
+                #(#arg_types: Clone + Send + 'static,)*
+            {
+                let handle = ::eventful_rs::ShardHandle::downgrade(&::eventful_rs::Sharded::as_handle(target));
+                let tracked_handle = handle.clone();
+                self.inner.add_labelled_tracked_connection(Some(label), move |(#(#arg_names,)*)| {
+                    ::eventful_rs::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
+                        #target_ident.#method_name(#(#arg_names),*);
+                    });
+                }, move |(#(#arg_names,)*)| {
+                    tracked_handle.try_deferred_upgrade_in_shard(async move |#target_ident| {
+                        #target_ident.#method_name(#(#arg_names),*);
+                    })
+                })
+            }
+        });
         signal_defs.push(quote! {
             pub struct #signal_name {
-                inner: ::eventful_rs::Event<(#(#arg_types,)*)>,
+                inner: ::eventful_rs::Event<(#(#arg_types,)*), #label_type>,
             }
 
             impl ::core::default::Default for #signal_name {
@@ -156,7 +216,8 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
 
             impl #signal_name {
-                pub fn connect<T, S>(&self, target: &S) -> ::eventful_rs::Connection<(#(#arg_types,)*)>
+                /// Subscribe to every emission, regardless of its label.
+                pub fn connect<T, S>(&self, target: &S) -> ::eventful_rs::Connection<(#(#arg_types,)*), #label_type>
                 where
                     T: #trait_bound,
                     S: ::eventful_rs::Sharded<T>,
@@ -175,47 +236,25 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
                     })
                 }
 
-                pub fn connect_filtered<T, S, F>(&self, target: &S, accept: F) -> ::eventful_rs::Connection<(#(#arg_types,)*)>
-                where
-                    T: #trait_bound,
-                    S: ::eventful_rs::Sharded<T>,
-                    F: Fn(&T) -> bool + Clone + Send + Sync + 'static,
-                    #(#arg_types: Clone + Send + 'static,)*
-                {
-                    let handle = ::eventful_rs::ShardHandle::downgrade(&::eventful_rs::Sharded::as_handle(target));
-                    let tracked_handle = handle.clone();
-                    let accept_a = accept.clone();
-                    let accept_b = accept;
-                    self.inner.add_tracked_connection(move |(#(#arg_names,)*)| {
-                        let accept = accept_a.clone();
-                        ::eventful_rs::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
-                            if accept(#target_ident) {
-                                #target_ident.#method_name(#(#arg_names),*);
-                            }
-                        });
-                    }, move |(#(#arg_names,)*)| {
-                        let accept = accept_b.clone();
-                        tracked_handle.try_deferred_upgrade_in_shard(async move |#target_ident| {
-                            if accept(#target_ident) {
-                                #target_ident.#method_name(#(#arg_names),*);
-                            }
-                        })
-                    })
-                }
+                #labelled_connect
 
-                pub fn emit(&self, #(#arg_names: #arg_types),*)
+                /// Queue delivery to wildcard and matching subscriptions.
+                /// A labelled signal takes its emitted label before the event arguments.
+                pub fn emit(&self, #label_param #(#arg_names: #arg_types),*)
                 where
                     #(#arg_types: Clone + Send + 'static,)*
                 {
-                    self.inner.emit((#(#arg_names,)*));
+                    self.inner.emit_labelled(#dispatch_label, (#(#arg_names,)*));
                 }
 
-                pub fn emit_tracked(&self, #(#arg_names: #arg_types),*)
+                /// Dispatch immediately and observe all selected deliveries.
+                /// Rejected subscriptions are skipped; matching panics become delivery errors.
+                pub fn emit_tracked(&self, #label_param #(#arg_names: #arg_types),*)
                     -> impl ::core::future::Future<Output = Result<(), ::eventful_rs::DeliveryError>> + Send + 'static + use<>
                 where
                     #(#arg_types: Clone + Send + 'static,)*
                 {
-                    self.inner.emit_tracked((#(#arg_names,)*))
+                    self.inner.emit_labelled_tracked(#dispatch_label, (#(#arg_names,)*))
                 }
             }
         });
@@ -227,19 +266,21 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         });
         extension_emitter_methods.push(quote! {
-            fn #emit_name(&self, #(#arg_names: #arg_types),*)
+            /// Queue delivery; labelled signals take the label before event arguments.
+            fn #emit_name(&self, #label_param #(#arg_names: #arg_types),*)
             where
                 #(#arg_types: Clone + Send + 'static,)*
             {
-                self.events().#method_name.emit(#(#arg_names),*);
+                self.events().#method_name.emit(#label_arg #(#arg_names),*);
             }
 
-            fn #emit_tracked_name(&self, #(#arg_names: #arg_types),*)
+            /// Dispatch immediately and await selected deliveries, reporting matching or handler errors.
+            fn #emit_tracked_name(&self, #label_param #(#arg_names: #arg_types),*)
                 -> impl ::core::future::Future<Output = Result<(), ::eventful_rs::DeliveryError>> + Send + 'static
             where
                 #(#arg_types: Clone + Send + 'static,)*
             {
-                self.events().#method_name.emit_tracked(#(#arg_names),*)
+                self.events().#method_name.emit_tracked(#label_arg #(#arg_names),*)
             }
         });
     }

@@ -7,4 +7,3 @@ license.workspace = true
 
 [dependencies]
 eventful-rs = { path = "../../eventful-rs", default-features = false }
-rand = "0.10"

@@ -1,0 +1,5 @@
+error: unexpected end of input, expected one of: `for`, parentheses, `unsafe`, `fn`, `extern`, identifier, `::`, `<`, `dyn`, square brackets, `*`, `&`, `!`, `impl`, `_`, lifetime
+ --> tests/ui/malformed_event_label.rs:5:18
+  |
+5 |     #[with_label()]
+  |                  ^
