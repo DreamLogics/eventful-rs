@@ -1,0 +1,5 @@
+error: event methods require an &self receiver
+ --> tests/ui/event_missing_receiver.rs:3:5
+  |
+3 |     fn some_event(values: Vec<String>);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

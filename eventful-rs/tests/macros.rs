@@ -103,3 +103,57 @@ fn generated_tracked_signals_observe_cross_shard_completion_and_closed_targets()
     source.changed().emit(99);
     source_shard.join().unwrap();
 }
+
+mod concrete_event_arguments {
+    use eventful_rs::*;
+    use std::cell::RefCell;
+
+    #[events]
+    trait Messages {
+        fn some_event(&self, values: Vec<String>);
+        fn nested(&self, values: Option<Vec<Result<String, u8>>>);
+    }
+
+    #[eventful(Messages, shard = DynamicShard)]
+    struct Mailbox {
+        values: RefCell<Vec<String>>,
+    }
+    impl Messages for Mailbox {
+        fn some_event(&self, values: Vec<String>) {
+            self.values.borrow_mut().extend(values);
+        }
+        fn nested(&self, values: Option<Vec<Result<String, u8>>>) {
+            self.values
+                .borrow_mut()
+                .extend(values.into_iter().flatten().filter_map(Result::ok));
+        }
+    }
+
+    #[test]
+    fn concrete_generic_arguments_are_delivered_between_shards() {
+        let source_shard = shard::Shard::new("concrete-source");
+        let target_shard = shard::Shard::new("concrete-target");
+        let factory = |bind: &dyn Fn(Mailbox) -> ShardRc<Mailbox>| {
+            bind(Mailbox {
+                values: RefCell::default(),
+                events: Default::default(),
+            })
+            .as_handle()
+        };
+        let source = source_shard.bind(factory);
+        let target = target_shard.bind(factory);
+        source.some_event().connect(&target);
+        source.nested().connect(&target);
+        futures::executor::block_on(source.emit_some_event_tracked(vec!["first".into()])).unwrap();
+        futures::executor::block_on(
+            source.emit_nested_tracked(Some(vec![Ok("second".into()), Err(1)])),
+        )
+        .unwrap();
+        let values = futures::executor::block_on(
+            target.deferred_upgrade_in_shard(async |value| value.values.borrow().clone()),
+        );
+        assert_eq!(values, ["first", "second"]);
+        source_shard.join().unwrap();
+        target_shard.join().unwrap();
+    }
+}

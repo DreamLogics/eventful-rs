@@ -1,4 +1,4 @@
-error: events require a non-generic synchronous &self method with no return type
+error: event methods must be synchronous
  --> tests/ui/async_event.rs:2:21
   |
 2 | trait Unsupported { async fn event(&self); }

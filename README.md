@@ -344,6 +344,10 @@ Declare an event interface with `#[events]`, attach it to a source with
 The generated `source.event_name().connect(&target)` queues delivery on the
 destination's shard. Arguments must be owned, `Clone + Send + 'static` values.
 Interfaces need not be `Send` or `Sync`; listener values remain thread-affine.
+Concrete argument types such as `Vec<String>` are supported:
+`fn some_event(&self, values: Vec<String>);`. The restriction on generics applies
+to declared trait or method parameters such as `fn some_event<T>(...)`, not to
+concrete container types. Every event method requires an `&self` receiver.
 
 ```rust
 use eventful_rs::*;

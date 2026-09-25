@@ -9,6 +9,9 @@ use syn::{
 
 /// Define a typed event interface with synchronous `&self` methods.
 ///
+/// Concrete argument types such as `Vec<String>` and `Option<Vec<String>>` are
+/// supported. Traits and methods cannot declare generic parameters (`<T>`).
+///
 /// Attach it to a source with `#[eventful(Interface)]` and implement it on
 /// listeners. `source.event_name().connect(&listener)` dispatches callbacks on
 /// each listener's shard. Ordinary emissions do not wait for listeners; tracked
@@ -36,17 +39,32 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
                 .into();
         };
         let sig = &method.sig;
-        if sig.asyncness.is_some()
-            || !sig.generics.params.is_empty()
-            || !matches!(sig.receiver(), Some(r) if matches!(r.kind, syn::ReceiverKind::Reference(_, _, None)))
-            || !matches!(&sig.output, syn::ReturnType::Default)
-        {
-            return syn::Error::new_spanned(
+        let error = if !sig.generics.params.is_empty() {
+            Some(syn::Error::new_spanned(
+                &sig.generics,
+                "event methods cannot declare generic parameters; concrete argument types such as Vec<String> are supported",
+            ))
+        } else if sig.asyncness.is_some() {
+            Some(syn::Error::new_spanned(
                 sig,
-                "events require a non-generic synchronous &self method with no return type",
-            )
-            .to_compile_error()
-            .into();
+                "event methods must be synchronous",
+            ))
+        } else if !matches!(sig.receiver(), Some(r) if matches!(r.kind, syn::ReceiverKind::Reference(_, _, None)))
+        {
+            Some(syn::Error::new_spanned(
+                sig,
+                "event methods require an &self receiver",
+            ))
+        } else if !matches!(&sig.output, syn::ReturnType::Default) {
+            Some(syn::Error::new_spanned(
+                &sig.output,
+                "event methods must omit the return type",
+            ))
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            return error.to_compile_error().into();
         }
     }
     let trait_name = &trait_item.ident;

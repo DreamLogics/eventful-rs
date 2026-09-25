@@ -1,0 +1,5 @@
+error: event methods cannot declare generic parameters; concrete argument types such as Vec<String> are supported
+ --> tests/ui/generic_event_method.rs:3:18
+  |
+3 |     fn some_event<T>(&self, value: T);
+  |                  ^^^
