@@ -8,6 +8,7 @@ use crate::event::EventInternal;
 /// Dropping a Connection instance will not automatically disconnect the listener,
 /// you may use the `scoped` method to create a ScopedConnection if this is desired.
 /// `Label` is the signal routing type; it defaults to `()` for unlabelled events.
+/// See the [`crate::Event`] example for registration and cleanup.
 pub struct Connection<Args, Label = ()> {
     /// Stable key identifying this entry within its owner storage.
     id: usize,
@@ -38,6 +39,8 @@ impl<Args, Label> Connection<Args, Label> {
 /// and a listener. It can be used to disconnect the listener from the event.
 /// Dropping a ScopedConnection instance will automatically disconnect
 /// the listener from the event.
+/// See the [`crate::Event`] example for scoped cleanup.
+#[must_use = "keep the guard alive for as long as the subscription is needed"]
 pub struct ScopedConnection<Args, Label = ()> {
     /// Stable key identifying this entry within its owner storage.
     id: usize,
@@ -62,6 +65,7 @@ impl<Args, Label> Drop for ScopedConnection<Args, Label> {
 /// Dropping the group keeps subscriptions active. Call disconnect() or use
 /// scoped() to disconnect every subscription. Groups created by ShardRc::connect
 /// also disconnect when their owning value is destroyed. Targets remain weak.
+/// See the [`crate::Event`] example for collection and scoped cleanup.
 #[derive(Clone, Default)]
 pub struct ConnectionGroup {
     /// Type-erased removers for the individual signal subscriptions.
@@ -99,8 +103,9 @@ impl ConnectionGroup {
 }
 
 /// A group that disconnects on drop. Dropping any clone disconnects the group,
-/// matching ScopedConnection semantics.
+/// matching [`ScopedConnection`] semantics. See the [`crate::Event`] example.
 #[derive(Clone)]
+#[must_use = "keep the guard alive for as long as the subscriptions are needed"]
 pub struct ScopedConnectionGroup(ConnectionGroup);
 
 impl Drop for ScopedConnectionGroup {
@@ -133,5 +138,55 @@ impl<Args, Label> Clone for ScopedConnection<Args, Label> {
             id: self.id,
             event: self.event.clone(),
         }
+    }
+}
+
+impl<Args, Label> std::fmt::Debug for Connection<Args, Label> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connection")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Args, Label> std::fmt::Debug for ScopedConnection<Args, Label> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScopedConnection")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for ConnectionGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectionGroup")
+            .field("subscriptions", &self.disconnectors.len())
+            .finish()
+    }
+}
+impl std::fmt::Debug for ScopedConnectionGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ScopedConnectionGroup")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+impl<Args: 'static, Label: Send + Sync + 'static> Extend<Connection<Args, Label>>
+    for ConnectionGroup
+{
+    fn extend<I: IntoIterator<Item = Connection<Args, Label>>>(&mut self, iter: I) {
+        for connection in iter {
+            self.push(connection);
+        }
+    }
+}
+impl<Args: 'static, Label: Send + Sync + 'static> FromIterator<Connection<Args, Label>>
+    for ConnectionGroup
+{
+    fn from_iter<I: IntoIterator<Item = Connection<Args, Label>>>(iter: I) -> Self {
+        let mut group = Self::default();
+        group.extend(iter);
+        group
     }
 }

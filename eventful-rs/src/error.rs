@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 /// Failure to join a shard or post work to a backend.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ShardError {
     /// Joining failed, with context and an optional underlying error.
     JoinError(
@@ -57,18 +58,23 @@ impl std::error::Error for ShardError {
 /// Monotonic process-wide allocator for shard identities.
 static LAST_SHARD_ID: Mutex<usize> = Mutex::new(0);
 
-/// Process-local shard identity. Prefer [`ShardId::new`] to constructing IDs manually.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Opaque process-local shard identity, allocated by [`ShardId::new`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ShardId(
-    /// Numeric identity; manually chosen values must not collide.
-    pub usize,
+    /// Numeric identity allocated by the library.
+    usize,
 );
 
 impl ShardId {
     /// Allocate a fresh process-local identity.
+    ///
+    /// # Panics
+    /// Panics if all process-local identities have been allocated.
     pub fn new() -> Self {
-        let mut last_id = LAST_SHARD_ID.lock().unwrap();
-        *last_id += 1;
+        let mut last_id = LAST_SHARD_ID.lock().unwrap_or_else(|e| e.into_inner());
+        *last_id = last_id
+            .checked_add(1)
+            .expect("shard identity space exhausted");
         ShardId(*last_id)
     }
 }

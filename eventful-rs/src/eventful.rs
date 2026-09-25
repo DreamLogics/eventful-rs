@@ -1,4 +1,5 @@
 //! Value construction and access to generated event interfaces.
+use crate::Sharded;
 use crate::{InvokeError, ShardAffinity, ShardBinding, ShardRcHandle};
 use std::sync::Arc;
 
@@ -12,6 +13,14 @@ pub trait Eventful {
     /// Construct on the designated shard and return a thread-safe handle.
     /// Only the factory's captures must be Send; Self may contain Rc or RefCell.
     /// The designated event loop must be running to complete this operation.
+    /// See the [quick start](crate#quick-start).
+    ///
+    /// # Errors
+    /// Returns [`InvokeError`] on shutdown, cancellation, invalid affinity, or
+    /// an unwinding factory panic.
+    ///
+    /// # Panics
+    /// Panics if initializing the named backend fails.
     fn spawn<F>(
         factory: F,
     ) -> impl Future<Output = Result<ShardRcHandle<Self>, InvokeError>> + Send + 'static
@@ -20,7 +29,7 @@ pub trait Eventful {
         Self::Shard: ShardBinding,
         F: FnOnce() -> Self + Send + 'static,
     {
-        Self::Shard::handle().bind_async(move |bind| bind(factory()).as_handle())
+        Self::Shard::handle().bind_async(move |bind| bind(factory()).to_handle())
     }
 }
 

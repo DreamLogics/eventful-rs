@@ -47,7 +47,7 @@ async fn main() -> Result<(), DeliveryError> {
     assert_eq!(second.import(vec!["Plums".into()]).await?, 1);
     let total = importer
         .join(&second)
-        .expect("same import shard")
+        .ok_or(InvokeError::WrongShard)?
         .try_deferred_upgrade_in_shard(async |(a, b)| {
             println!("First batch: {}", a.report());
             a.count() + b.count()

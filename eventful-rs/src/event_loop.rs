@@ -2,15 +2,22 @@
 use crate::{Eventful, HasEvents, InvokeError, ShardError, ShardHandle, ShardId, ShardRc};
 
 /// Thread-safe submission contract implemented by shard backends.
+/// See the [calling methods guide](crate#calling-methods).
 /// Built-in backends queue accepted jobs in admission order; async jobs may interleave.
 pub trait EventLoopHandle: Clone + Send + Sync + 'static {
     /// Identity of the destination shard.
     fn shard_id(&self) -> ShardId;
-    /// Queue a synchronous callback. Built-in backends panic if admission is closed.
+    /// Queue a synchronous callback.
+    ///
+    /// # Panics
+    /// Built-in backends panic if admission is closed.
     fn invoke<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static;
-    /// Queue an async callback; built-in backends panic if admission is closed.
+    /// Queue an async callback.
+    ///
+    /// # Panics
+    /// Built-in backends panic if admission is closed.
     fn invoke_async<F>(&self, f: F)
     where
         F: AsyncFnOnce() -> () + Send + 'static;
@@ -27,7 +34,10 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
         H: ShardHandle<T>,
         F: AsyncFnOnce(&T) -> () + Send + 'static;
 
-    /// Submit immediately and observe the result; built-in backends panic on delivery failure.
+    /// Submit immediately and observe the result.
+    ///
+    /// # Panics
+    /// Built-in backends panic on delivery failure, including a callback panic.
     fn deferred_invoke<T, H, F, R>(
         &self,
         handle: H,
@@ -41,6 +51,10 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
 
     /// Submit a callback immediately and report its completion. Backends may
     /// override this to distinguish rejection and missing targets from cancellation.
+    ///
+    /// # Errors
+    /// Returns [`InvokeError`] for failed delivery. The default implementation
+    /// distinguishes callback panics and cancellation.
     fn try_deferred_invoke<T, H, F, R>(
         &self,
         handle: H,
@@ -64,13 +78,17 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
         Box::pin(async move { rx.await.map_err(|_| InvokeError::Canceled)? })
     }
 
-    /// Submit a future; built-in backends panic if admission is closed.
+    /// Submit a future.
+    ///
+    /// # Panics
+    /// Built-in backends panic if admission is closed.
     fn spawn<F>(&self, f: F)
     where
         F: Future + Send + 'static;
 }
 
 /// Lifecycle and construction interface shared by runtime backends.
+/// See the [`crate::DynamicShard`] construction example.
 pub trait EventLoop {
     /// Thread-safe handle used to submit work.
     type HandleType: EventLoopHandle;
@@ -78,14 +96,19 @@ pub trait EventLoop {
     fn handle(&self) -> Self::HandleType;
     /// Construct values on this shard and return a Send result.
     /// Runs directly on the owner thread; otherwise blocks until the factory finishes.
-    /// Built-in backends panic on wrong affinity, stopped shards, or cross-thread
+    ///
+    /// # Panics
+    /// Built-in backends panic on wrong affinity, stopped shards, factory panics, or cross-thread
     /// blocking from Tokio. Use backend `bind_async` methods in async code.
     fn bind<F, R, T>(&self, f: F) -> R
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
         T: Eventful + HasEvents<T::EventSetType> + Sized + 'static;
-    /// Submit a future; built-in backends panic if admission is closed.
+    /// Submit a future.
+    ///
+    /// # Panics
+    /// Built-in backends panic if admission is closed.
     fn spawn<F>(&self, f: F)
     where
         F: Future + Send + 'static,
@@ -94,5 +117,8 @@ pub trait EventLoop {
     }
     /// Stop and join a background shard. Fails on its own thread or inside Tokio.
     /// Calling-thread and Slint backends return immediately; drive their shutdown separately.
+    ///
+    /// # Errors
+    /// Returns [`ShardError`] for self-joining, blocking inside Tokio, or failed shutdown.
     fn join(&self) -> Result<(), ShardError>;
 }

@@ -24,6 +24,7 @@ use crate::{fresh_target, pascal};
 /// bulk connections subscribe to every label. Matching occurs on the emitting
 /// thread before cloning arguments or submitting work to the receiver's shard.
 pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let runtime = crate::runtime_path();
     let event_trait: Option<syn::Path> = if attr.is_empty() {
         None
     } else {
@@ -97,6 +98,10 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             .retain(|attr| !attr.path().is_ident("with_label"));
         labels.push(label);
     }
+    let item_cfg = match crate::attributes::conditions(&trait_item.attrs) {
+        Ok(attrs) => attrs,
+        Err(e) => return e.to_compile_error().into(),
+    };
     let trait_name = &trait_item.ident;
     let visibility = &trait_item.vis;
     let set_name = format_ident!("{}EventSet", trait_name);
@@ -131,7 +136,11 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             }
-            Some(Ok((method_name.clone(), signal_name, names, types)))
+            let cfg = match crate::attributes::conditions(&method.attrs) {
+                Ok(attrs) => attrs,
+                Err(e) => return Some(Err(e)),
+            };
+            Some(Ok((method_name.clone(), signal_name, names, types, cfg)))
         })
         .collect::<Result<Vec<_>, syn::Error>>();
 
@@ -145,15 +154,19 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut extension_signal_methods = Vec::new();
     let mut extension_emitter_methods = Vec::new();
 
-    for ((method_name, signal_name, arg_names, arg_types), label) in methods.iter().zip(&labels) {
+    for ((method_name, signal_name, arg_names, arg_types, cfg), label) in
+        methods.iter().zip(&labels)
+    {
         let target_ident = fresh_target(arg_names);
-        let emit_tracked_name = format_ident!("emit_{}_tracked", method_name);
-        let emit_name = format_ident!("emit_{}", method_name);
+        let plain_name = method_name.to_string();
+        let plain_name = plain_name.strip_prefix("r#").unwrap_or(&plain_name);
+        let emit_tracked_name = format_ident!("emit_{}_tracked", plain_name);
+        let emit_name = format_ident!("emit_{}", plain_name);
 
         let trait_bound = if let Some(event_trait) = &event_trait {
             quote! {
-                ::eventful_rs::Eventful
-                        + ::eventful_rs::HasEvents<T::EventSetType>
+                #runtime::Eventful
+                        + #runtime::HasEvents<T::EventSetType>
                         + #trait_name
                         + #event_trait
                         + Sized
@@ -161,8 +174,8 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         } else {
             quote! {
-                ::eventful_rs::Eventful
-                        + ::eventful_rs::HasEvents<T::EventSetType>
+                #runtime::Eventful
+                        + #runtime::HasEvents<T::EventSetType>
                         + #trait_name
                         + Sized
                         + 'static
@@ -184,16 +197,16 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             /// The receiver is held weakly. Dropping the connection keeps it active;
             /// use `disconnect` or `scoped` to remove the subscription.
             pub fn connect_labelled<T, S>(&self, target: &S, label: #ty)
-                -> ::eventful_rs::Connection<(#(#arg_types,)*), #ty>
+                -> #runtime::Connection<(#(#arg_types,)*), #ty>
             where
                 T: #trait_bound,
-                S: ::eventful_rs::Sharded<T>,
+                S: #runtime::Sharded<T>,
                 #(#arg_types: Clone + Send + 'static,)*
             {
-                let handle = ::eventful_rs::ShardHandle::downgrade(&::eventful_rs::Sharded::as_handle(target));
+                let handle = #runtime::ShardHandle::downgrade(&#runtime::Sharded::to_handle(target));
                 let tracked_handle = handle.clone();
                 self.inner.add_labelled_tracked_connection(Some(label), move |(#(#arg_names,)*)| {
-                    ::eventful_rs::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
+                    #runtime::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
                         #target_ident.#method_name(#(#arg_names),*);
                     });
                 }, move |(#(#arg_names,)*)| {
@@ -205,28 +218,35 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
         signal_defs.push(quote! {
             /// Typed signal with weak listener connections and optional routing labels.
-            pub struct #signal_name {
-                inner: ::eventful_rs::Event<(#(#arg_types,)*), #label_type>,
+            #(#item_cfg)*
+            #(#cfg)*
+            #[derive(Debug)]
+            #visibility struct #signal_name {
+                inner: #runtime::Event<(#(#arg_types,)*), #label_type>,
             }
 
+            #(#item_cfg)*
+            #(#cfg)*
             impl ::core::default::Default for #signal_name {
                 fn default() -> Self {
-                    Self { inner: ::eventful_rs::Event::default() }
+                    Self { inner: #runtime::Event::default() }
                 }
             }
 
+            #(#item_cfg)*
+            #(#cfg)*
             impl #signal_name {
                 /// Subscribe to every emission, regardless of its label.
-                pub fn connect<T, S>(&self, target: &S) -> ::eventful_rs::Connection<(#(#arg_types,)*), #label_type>
+                pub fn connect<T, S>(&self, target: &S) -> #runtime::Connection<(#(#arg_types,)*), #label_type>
                 where
                     T: #trait_bound,
-                    S: ::eventful_rs::Sharded<T>,
+                    S: #runtime::Sharded<T>,
                     #(#arg_types: Clone + Send + 'static,)*
                 {
-                    let handle = ::eventful_rs::ShardHandle::downgrade(&::eventful_rs::Sharded::as_handle(target));
+                    let handle = #runtime::ShardHandle::downgrade(&#runtime::Sharded::to_handle(target));
                     let tracked_handle = handle.clone();
                     self.inner.add_tracked_connection(move |(#(#arg_names,)*)| {
-                        ::eventful_rs::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
+                        #runtime::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
                             #target_ident.#method_name(#(#arg_names),*);
                         });
                     }, move |(#(#arg_names,)*)| {
@@ -250,7 +270,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
                 /// Dispatch immediately and observe all selected deliveries.
                 /// Rejected subscriptions are skipped; matching panics become delivery errors.
                 pub fn emit_tracked(&self, #label_param #(#arg_names: #arg_types),*)
-                    -> impl ::core::future::Future<Output = Result<(), ::eventful_rs::DeliveryError>> + Send + 'static + use<>
+                    -> impl ::core::future::Future<Output = Result<(), #runtime::DeliveryError>> + Send + 'static + use<>
                 where
                     #(#arg_types: Clone + Send + 'static,)*
                 {
@@ -260,16 +280,18 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
 
         set_fields.push(
-            quote!(#[doc = "Signal storage for this event method."] pub #method_name: #signal_name),
+            quote!(#(#cfg)* #[doc = "Signal storage for this event method."] #method_name: #signal_name),
         );
         extension_signal_methods.push(quote! {
             /// Access this event signal to connect listeners.
+            #(#cfg)*
             fn #method_name(&self) -> &#signal_name {
                 &self.events().#method_name
             }
         });
         extension_emitter_methods.push(quote! {
             /// Queue delivery; labelled signals take the label before event arguments.
+            #(#cfg)*
             fn #emit_name(&self, #label_param #(#arg_names: #arg_types),*)
             where
                 #(#arg_types: Clone + Send + 'static,)*
@@ -278,8 +300,9 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
 
             /// Dispatch immediately and await selected deliveries, reporting matching or handler errors.
+            #(#cfg)*
             fn #emit_tracked_name(&self, #label_param #(#arg_names: #arg_types),*)
-                -> impl ::core::future::Future<Output = Result<(), ::eventful_rs::DeliveryError>> + Send + 'static
+                -> impl ::core::future::Future<Output = Result<(), #runtime::DeliveryError>> + Send + 'static
             where
                 #(#arg_types: Clone + Send + 'static,)*
             {
@@ -288,8 +311,18 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
     }
 
-    let connect_methods = methods.iter().map(|(name, _, _, _)| name);
-    let connect_args = methods.iter().flat_map(|(_, _, _, types)| types);
+    let connect_calls = methods.iter().map(|(name, _, _, _, cfg)| {
+        quote! {
+            #(#cfg)* group.push(self.#name.connect(target));
+        }
+    });
+    let accessors = methods.iter().map(|(name, signal, _, _, cfg)| {
+        quote! {
+            /// Borrow a signal without replacing its subscription storage.
+            #(#cfg)*
+            #visibility fn #name(&self) -> &#signal { &self.#name }
+        }
+    });
     let extra_bound = event_trait.as_ref().map(|path| quote!(+ #path));
 
     quote! {
@@ -298,55 +331,66 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         #(#signal_defs)*
 
         /// Generated storage for all signals in the event interface.
-        #[derive(Default)]
-        pub struct #set_name {
+        /// See the eventful-rs crate guide for a complete typed-event example.
+        #(#item_cfg)*
+        #[derive(Debug, Default)]
+        #visibility struct #set_name {
             #(#set_fields,)*
         }
 
-        impl<T> ::eventful_rs::ConnectEvents<T> for #set_name
+        #(#item_cfg)*
+        impl #set_name { #(#accessors)* }
+
+        #(#item_cfg)*
+        impl<T> #runtime::ConnectEvents<T> for #set_name
         where
-            T: ::eventful_rs::Eventful + ::eventful_rs::HasEvents<T::EventSetType>
+            T: #runtime::Eventful + #runtime::HasEvents<T::EventSetType>
                 + #trait_name #extra_bound + 'static,
-            #(#connect_args: Clone + Send + 'static,)*
         {
-            fn connect_events<S: ::eventful_rs::Sharded<T>>(&self, target: &S)
-                -> ::eventful_rs::ConnectionGroup
+            fn connect_events<S: #runtime::Sharded<T>>(&self, target: &S)
+                -> #runtime::ConnectionGroup
             {
-                let mut group = ::eventful_rs::ConnectionGroup::default();
-                #(group.push(self.#connect_methods.connect(target));)*
+                let mut group = #runtime::ConnectionGroup::default();
+                #(#connect_calls)*
                 group
             }
         }
 
         /// Access individual signals through local values or remote handles.
-        #visibility trait #ext_signals_name: ::eventful_rs::HasEvents<#set_name> {
+        #(#item_cfg)*
+        #visibility trait #ext_signals_name: #runtime::HasEvents<#set_name> {
             #(#extension_signal_methods)*
         }
 
         /// Emit ordinary or tracked events through shared signal storage.
-        #visibility trait #ext_emitter_name: ::eventful_rs::HasEvents<#set_name>{
+        #(#item_cfg)*
+        #visibility trait #ext_emitter_name: #runtime::HasEvents<#set_name>{
             #(#extension_emitter_methods)*
         }
 
-        impl<T> #ext_signals_name for ::eventful_rs::ShardRc<T>
+        #(#item_cfg)*
+        impl<T> #ext_signals_name for #runtime::ShardRc<T>
         where
-            T: ::eventful_rs::Eventful<EventSetType = #set_name> + ::eventful_rs::HasEvents<#set_name> + Sized + 'static,
-            ::eventful_rs::ShardRc<T>: ::eventful_rs::HasEvents<#set_name>,
+            T: #runtime::Eventful<EventSetType = #set_name> + #runtime::HasEvents<#set_name> + Sized + 'static,
+            #runtime::ShardRc<T>: #runtime::HasEvents<#set_name>,
         {}
 
-        impl<T> #ext_signals_name for ::eventful_rs::ShardRcHandle<T>
+        #(#item_cfg)*
+        impl<T> #ext_signals_name for #runtime::ShardRcHandle<T>
         where
-            T: ::eventful_rs::Eventful<EventSetType = #set_name> + ::eventful_rs::HasEvents<#set_name> + Sized + 'static,
-            ::eventful_rs::ShardRcHandle<T>: ::eventful_rs::HasEvents<#set_name>,
+            T: #runtime::Eventful<EventSetType = #set_name> + #runtime::HasEvents<#set_name> + Sized + 'static,
+            #runtime::ShardRcHandle<T>: #runtime::HasEvents<#set_name>,
         {}
 
-        impl<T> #ext_signals_name for ::eventful_rs::ShardWeakHandle<T>
+        #(#item_cfg)*
+        impl<T> #ext_signals_name for #runtime::ShardWeakHandle<T>
         where
-            T: ::eventful_rs::Eventful<EventSetType = #set_name> + ::eventful_rs::HasEvents<#set_name> + Sized + 'static,
-            ::eventful_rs::ShardWeakHandle<T>: ::eventful_rs::HasEvents<#set_name>,
+            T: #runtime::Eventful<EventSetType = #set_name> + #runtime::HasEvents<#set_name> + Sized + 'static,
+            #runtime::ShardWeakHandle<T>: #runtime::HasEvents<#set_name>,
         {}
 
-        impl<T: ::eventful_rs::HasEvents<#set_name> + ?Sized> #ext_emitter_name for T {}
+        #(#item_cfg)*
+        impl<T: #runtime::HasEvents<#set_name> + ?Sized> #ext_emitter_name for T {}
     }
     .into()
 }

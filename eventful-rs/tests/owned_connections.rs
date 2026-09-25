@@ -18,13 +18,13 @@ struct AppWindow {
 }
 impl AppWindow {
     fn new(doc_man: ShardRcHandle<DocumentManager>, dropped: oneshot::Sender<()>) -> ShardRc<Self> {
-        let w: ShardRc<Self> = Self {
+        let w: ShardRc<Self> = ShardRc::try_bind(Self {
             ui: Rc::new(()),
             dropped: Some(dropped),
             events: Default::default(),
-        }
-        .into();
-        w.connect(&doc_man);
+        })
+        .unwrap();
+        ShardRc::connect(&w, &doc_man);
         w
     }
 }
@@ -55,24 +55,24 @@ fn constructor_connections_follow_the_value_not_the_local_wrapper_or_event_set()
             saved: output,
             events: Default::default(),
         })
-        .as_handle()
+        .to_handle()
     });
     WindowShard::shard().run_main(move || async move {
         let (tx, dropped) = oneshot::channel();
         let window = AppWindow::new(manager.clone(), tx);
         assert_eq!(Rc::strong_count(&window.ui), 1);
         let clone = window.clone();
-        let handle = window.as_handle();
-        let events = window.events.clone(); // Retaining signals must not retain subscriptions past T's destruction.
+        let handle = window.to_handle();
+        let events = window.events().clone(); // Retaining signals must not retain subscriptions past T's destruction.
         drop(window);
         events
-            .save
+            .save()
             .emit_tracked("local clone".into())
             .await
             .unwrap();
         drop(clone);
         events
-            .save
+            .save()
             .emit_tracked("remote handle".into())
             .await
             .unwrap();
@@ -94,7 +94,7 @@ fn constructor_connections_follow_the_value_not_the_local_wrapper_or_event_set()
         ready.await.unwrap();
         drop(handle);
         events
-            .save
+            .save()
             .emit_tracked("in-flight callback".into())
             .await
             .unwrap();
@@ -102,7 +102,7 @@ fn constructor_connections_follow_the_value_not_the_local_wrapper_or_event_set()
         pending.await.unwrap();
         dropped.await.unwrap(); // Wait for actual shard collection, without a timing assumption.
         events
-            .save
+            .save()
             .emit_tracked("after destruction".into())
             .await
             .unwrap();
@@ -124,28 +124,28 @@ fn ownership_survives_store_shutdown_but_not_the_last_local_reference() {
             saved: output,
             events: Default::default(),
         })
-        .as_handle()
+        .to_handle()
     });
     declare_shard!(ShutdownShard, runtime = main);
     #[eventful(WindowEvents, shard = ShutdownShard)]
     struct LocalWindow;
     let destination = manager.clone();
     let (window, token) = ShutdownShard::shard().run_main(move || async move {
-        let window: ShardRc<LocalWindow> = LocalWindow {
+        let window: ShardRc<LocalWindow> = ShardRc::try_bind(LocalWindow {
             events: Default::default(),
-        }
-        .into();
-        let token = window.connect(&destination);
+        })
+        .unwrap();
+        let token = ShardRc::connect(&window, &destination);
         (window, token)
     });
     // The store has gone, but a local Rc still owns the value and its guards.
-    let events = window.events.clone();
-    block_on(events.save.emit_tracked("after shutdown".into())).unwrap();
+    let events = window.events().clone();
+    block_on(events.save().emit_tracked("after shutdown".into())).unwrap();
     assert_eq!(*saved.lock().unwrap(), ["after shutdown"]);
     drop(window);
     // An externally retained event set AND connection token do not extend
     // the lifetime of a value-owned subscription.
-    block_on(events.save.emit_tracked("after drop".into())).unwrap();
+    block_on(events.save().emit_tracked("after drop".into())).unwrap();
     assert_eq!(*saved.lock().unwrap(), ["after shutdown"]);
     token.disconnect(); // Harmless after automatic cleanup.
     docs.join().unwrap();

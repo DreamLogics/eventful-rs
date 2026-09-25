@@ -5,6 +5,8 @@
 use proc_macro::TokenStream;
 use quote::format_ident;
 mod affinity;
+mod attributes;
+mod declaration;
 mod dispatch;
 mod entry;
 mod events;
@@ -34,6 +36,9 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Generate handle wrappers for annotated methods in an inherent `impl`.
+///
+/// The generated extension trait is private by default. Pass `pub`, `pub(crate)`,
+/// or another Rust visibility to export it: `#[asynchronize(pub)]`.
 ///
 /// Mark methods with `#[asynced]` to await their results, or `#[action]` to queue
 /// work from synchronous or async code without waiting. Original methods
@@ -102,6 +107,7 @@ pub fn sharded_main(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Convert snake-case method names into generated signal type suffixes.
 fn pascal(value: &str) -> String {
+    let value = value.strip_prefix("r#").unwrap_or(value);
     value
         .split('_')
         .filter(|s| !s.is_empty())
@@ -122,4 +128,29 @@ fn fresh_target(arguments: &[syn::Ident]) -> syn::Ident {
         name.push('_');
     }
     format_ident!("{}", name)
+}
+
+/// Resolve the runtime dependency using the downstream manifest, including aliases.
+fn runtime_path() -> syn::Path {
+    match proc_macro_crate::crate_name("eventful-rs") {
+        Ok(proc_macro_crate::FoundCrate::Name(name)) => {
+            let ident = format_ident!("{}", name);
+            syn::parse_quote!(::#ident)
+        }
+        // Integration tests and doctests use the library through its extern name.
+        _ => syn::parse_quote!(::eventful_rs),
+    }
+}
+
+/// Declare a named singleton: `declare_shard!(pub Worker, runtime = std);`.
+///
+/// Supports outer attributes and Rust visibility, including inside functions.
+/// Runtimes are `std`, `main`, `tokio`, `tokio_main`, and `slint`; the last three
+/// require their corresponding runtime features. Calling-thread and UI markers
+/// must first be initialized on their owner thread.
+/// See the [runtime guide](https://docs.rs/eventful-rs/latest/eventful_rs/#quick-start)
+/// for a complete example.
+#[proc_macro]
+pub fn declare_shard(input: TokenStream) -> TokenStream {
+    declaration::declare_shard(input)
 }

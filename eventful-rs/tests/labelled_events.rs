@@ -161,7 +161,7 @@ fn generated_labels_work_across_shards_with_bulk_connections_and_closed_targets(
             count: Default::default(),
             events: Default::default(),
         })
-        .as_handle()
+        .to_handle()
     };
     let source = source_shard.bind(make);
     let target = target_shard.bind(make);

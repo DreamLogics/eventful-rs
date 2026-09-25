@@ -9,9 +9,13 @@ pub struct TokioLocalShard {
     /// Shared implementation of the calling-thread driver.
     inner: crate::main_loop::MainLoop,
     /// Identity of this shard.
-    pub shard_id: ShardId,
+    shard_id: ShardId,
 }
 impl TokioLocalShard {
+    /// Return this backend's immutable shard identity.
+    pub fn shard_id(&self) -> ShardId {
+        self.shard_id
+    }
     /// Create a single-use Tokio event loop bound to this thread.
     /// The name is reserved for compatibility and currently unused.
     pub fn new(_name: &str) -> Self {
@@ -20,6 +24,10 @@ impl TokioLocalShard {
         Self { inner, shard_id }
     }
     /// Run once on the constructing thread. The main future may be non-Send.
+    ///
+    /// # Panics
+    /// Panics on another thread, repeated use, or inside a Tokio runtime.
+    /// Panics from the main future propagate to the caller.
     pub fn run_main<F, RF, R>(&self, main: F) -> R
     where
         F: FnOnce() -> RF + 'static,
@@ -29,6 +37,9 @@ impl TokioLocalShard {
         self.inner.run_main(main)
     }
     /// Drive until shutdown, once only, on the constructing thread and outside Tokio.
+    ///
+    /// # Panics
+    /// Panics on another thread, repeated use, or inside a Tokio runtime.
     pub fn run_event_loop(&self) {
         self.inner.run_event_loop()
     }
@@ -37,6 +48,8 @@ impl TokioLocalShard {
         self.handle().request_shutdown();
     }
     /// Submit a construction factory immediately; await its result without blocking.
+    ///
+    /// # Errors
     /// Returns an error for mismatched affinity, shutdown, cancellation, or a factory panic.
     pub fn bind_async<F, R, T>(
         &self,
@@ -70,5 +83,13 @@ impl EventLoop for TokioLocalShard {
     }
     fn join(&self) -> Result<(), ShardError> {
         Ok(())
+    }
+}
+
+impl std::fmt::Debug for TokioLocalShard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokioLocalShard")
+            .field("shard_id", &self.shard_id)
+            .finish_non_exhaustive()
     }
 }

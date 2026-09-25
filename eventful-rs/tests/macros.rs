@@ -46,7 +46,7 @@ fn generated_dispatch_supports_non_send_values_and_events_between_shards() {
             local: Rc::new(()),
             events: Default::default(),
         })
-        .as_handle()
+        .to_handle()
     });
     let target = WORKER.bind(|bind| {
         bind(Counter {
@@ -54,7 +54,7 @@ fn generated_dispatch_supports_non_send_values_and_events_between_shards() {
             local: Rc::new(()),
             events: Default::default(),
         })
-        .as_handle()
+        .to_handle()
     });
     counter.changed().connect(&target);
     counter.set(4);
@@ -82,7 +82,7 @@ fn generated_tracked_signals_observe_cross_shard_completion_and_closed_targets()
             local: Rc::new(()),
             events: Default::default(),
         })
-        .as_handle()
+        .to_handle()
     };
     let source = source_shard.bind(make_counter);
     let target = target_shard.bind(make_counter);
@@ -138,7 +138,7 @@ mod concrete_event_arguments {
                 values: RefCell::default(),
                 events: Default::default(),
             })
-            .as_handle()
+            .to_handle()
         };
         let source = source_shard.bind(factory);
         let target = target_shard.bind(factory);

@@ -73,6 +73,7 @@ impl Drop for ContextGuard {
 
 /// A submission or deferred invocation failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum InvokeError {
     /// The shard no longer accepts submissions.
     Closed,
@@ -130,7 +131,7 @@ impl ShardEventHandle {
     pub(crate) fn post(&self, job: Job) -> Result<(), InvokeError> {
         let command = Command::Job(job);
         let result = {
-            let tx = self.sender.lock().unwrap();
+            let tx = self.sender.lock().unwrap_or_else(|e| e.into_inner());
             match tx.as_ref() {
                 Some(tx) => tx.unbounded_send(command).map_err(|e| e.into_inner()),
                 None => Err(command),
@@ -144,7 +145,7 @@ impl ShardEventHandle {
     }
     /// Reject new submissions immediately and enqueue shutdown after accepted work.
     pub fn request_shutdown(&self) {
-        let tx = self.sender.lock().unwrap().take();
+        let tx = self.sender.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(tx) = tx {
             let _ = tx.unbounded_send(Command::Stop);
         }
@@ -153,11 +154,14 @@ impl ShardEventHandle {
     pub fn is_closed(&self) -> bool {
         self.sender
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .is_none_or(|s| s.is_closed())
     }
-    /// Queue a synchronous callback, returning an admission error if closed.
+    /// Queue a synchronous callback.
+    ///
+    /// # Errors
+    /// Returns [`InvokeError::Closed`] if admission has stopped.
     pub fn try_invoke<F>(&self, f: F) -> Result<(), InvokeError>
     where
         F: FnOnce() + Send + 'static,
@@ -169,6 +173,9 @@ impl ShardEventHandle {
         }))
     }
     /// Queue an async callback; its future is created and polled on the shard.
+    ///
+    /// # Errors
+    /// Returns [`InvokeError::Closed`] if admission has stopped.
     pub fn try_invoke_async<F>(&self, f: F) -> Result<(), InvokeError>
     where
         F: AsyncFnOnce() -> () + Send + 'static,
@@ -179,7 +186,10 @@ impl ShardEventHandle {
             })
         }))
     }
-    /// Queue an existing Send future, returning an admission error if closed.
+    /// Queue an existing Send future.
+    ///
+    /// # Errors
+    /// Returns [`InvokeError::Closed`] if admission has stopped.
     pub fn try_spawn<F>(&self, f: F) -> Result<(), InvokeError>
     where
         F: Future + Send + 'static,
@@ -192,6 +202,10 @@ impl ShardEventHandle {
     }
     /// Queue a value callback, rejecting closed or mismatched shards.
     /// A target that expires before execution is silently skipped.
+    ///
+    /// # Errors
+    /// Returns [`InvokeError::WrongShard`] for a mismatched handle, or
+    /// [`InvokeError::Closed`] if admission has stopped.
     pub fn try_invoke_with_handle<T, H, F>(&self, handle: H, f: F) -> Result<(), InvokeError>
     where
         T: Eventful + HasEvents<T::EventSetType> + 'static,
@@ -216,6 +230,10 @@ impl ShardEventHandle {
     }
     /// Queue an async value callback, rejecting closed or mismatched shards.
     /// A target that expires before execution is silently skipped.
+    ///
+    /// # Errors
+    /// Returns [`InvokeError::WrongShard`] for a mismatched handle, or
+    /// [`InvokeError::Closed`] if admission has stopped.
     pub fn try_invoke_with_handle_async<T, H, F>(&self, handle: H, f: F) -> Result<(), InvokeError>
     where
         T: Eventful + HasEvents<T::EventSetType> + 'static,
@@ -240,6 +258,10 @@ impl ShardEventHandle {
     }
     /// Submit immediately and asynchronously receive the result. Dropping the
     /// receiver does not cancel the operation. Weak targets may be missing.
+    ///
+    /// # Errors
+    /// Reports closed shards, mismatched or missing targets, cancellation, and
+    /// unwinding callback panics through [`InvokeError`].
     pub fn try_deferred_invoke<T, H, F, R>(
         &self,
         handle: H,
@@ -281,6 +303,10 @@ impl ShardEventHandle {
         }
     }
     /// Create a value on its owner thread; usable from any executor.
+    ///
+    /// # Errors
+    /// Returns [`InvokeError`] on shutdown, affinity mismatch, cancellation,
+    /// or an unwinding factory panic.
     pub fn bind_async<F, R, T>(
         &self,
         f: F,

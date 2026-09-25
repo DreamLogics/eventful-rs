@@ -92,7 +92,7 @@ mod notifications {
         received_notifications: RefCell<Vec<Notification>>,
     }
 
-    #[asynchronize]
+    #[asynchronize(pub)]
     impl Subscriber {
         /// Construct this example value and initialize its event storage.
         pub async fn new(name: &'static str) -> Result<ShardRcHandle<Self>, InvokeError> {
@@ -125,17 +125,16 @@ mod notifications {
 
 /// Run the scenario and verify its observable results before shutting down.
 #[sharded_main(Main)]
-async fn main() {
+async fn main() -> Result<(), InvokeError> {
     use notifications::*;
-    let orders = Subscriber::new("Orders").await.unwrap();
-    let billing = Subscriber::new("Billing").await.unwrap();
-    let shipping = Subscriber::new("Shipping").await.unwrap();
-    let orders_or_shipping = Subscriber::new("Orders or shipping").await.unwrap();
-    let observer = Subscriber::new("All notifications").await.unwrap();
-    let bus: ShardRc<NotificationBus> = NotificationBus {
+    let orders = Subscriber::new("Orders").await?;
+    let billing = Subscriber::new("Billing").await?;
+    let shipping = Subscriber::new("Shipping").await?;
+    let orders_or_shipping = Subscriber::new("Orders or shipping").await?;
+    let observer = Subscriber::new("All notifications").await?;
+    let bus: ShardRc<NotificationBus> = ShardRc::try_bind(NotificationBus {
         events: Default::default(),
-    }
-    .into();
+    })?;
 
     bus.on_publish().connect_labelled(&orders, Topics::ORDERS);
     bus.on_publish().connect_labelled(&billing, Topics::BILLING);
@@ -162,7 +161,7 @@ async fn main() {
         (vec![], "System heartbeat"),
     ] {
         // Tracking waits for every selected receiver before continuing.
-        bus.publish(topics, message.into()).await.unwrap();
+        bus.publish(topics, message.into()).await?;
     }
 
     let totals = (
@@ -177,4 +176,5 @@ async fn main() {
         "Totals: Orders: {}, Billing: {}, Shipping: {}, Orders or shipping: {}, All: {}",
         totals.0, totals.1, totals.2, totals.3, totals.4,
     );
+    Ok(())
 }

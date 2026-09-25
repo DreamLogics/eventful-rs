@@ -14,14 +14,20 @@ pub struct SlintShard {
     /// Thread-safe admission handle for this backend.
     handle: SlintShardHandle,
     /// Identity of this shard.
-    pub shard_id: ShardId,
+    shard_id: ShardId,
     /// Constructing or worker thread identity used to enforce thread affinity.
     owner: std::thread::ThreadId,
     /// Cloneable completion notification from the Slint driver.
     done: Shared<oneshot::Receiver<()>>,
 }
 impl SlintShard {
+    /// Return this backend's immutable shard identity.
+    pub fn shard_id(&self) -> ShardId {
+        self.shard_id
+    }
     /// Schedule the driver on the current UI thread.
+    ///
+    /// # Panics
     /// Panics if the Slint event loop is unavailable.
     pub fn new() -> Self {
         let (handle, rx) = SlintShardHandle::channel();
@@ -54,6 +60,9 @@ impl SlintShard {
         }
     }
     /// Drain the shard before quitting Slint; the UI loop must remain active.
+    ///
+    /// # Errors
+    /// Returns [`ShardError::JoinError`] if the driver ends without signaling completion.
     pub async fn shutdown_async(&self) -> Result<(), ShardError> {
         self.request_shutdown();
         self.done
@@ -66,6 +75,8 @@ impl SlintShard {
         self.handle.request_shutdown();
     }
     /// Submit a construction factory immediately; await its result without blocking.
+    ///
+    /// # Errors
     /// Returns an error for mismatched affinity, shutdown, cancellation, or a factory panic.
     pub fn bind_async<F, R, T>(
         &self,
@@ -104,5 +115,13 @@ impl EventLoop for SlintShard {
 impl Drop for SlintShard {
     fn drop(&mut self) {
         self.request_shutdown();
+    }
+}
+
+impl std::fmt::Debug for SlintShard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlintShard")
+            .field("shard_id", &self.shard_id)
+            .finish_non_exhaustive()
     }
 }

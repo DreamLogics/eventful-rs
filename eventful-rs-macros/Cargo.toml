@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+homepage = "https://github.com/DreamLogics/eventful-rs"
 repository = "https://github.com/DreamLogics/eventful-rs"
 description = "Procedural macros for eventful-rs typed events and shard dispatch"
 readme = "README.md"
@@ -16,6 +18,7 @@ include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 proc-macro = true
 
 [dependencies]
+proc-macro-crate = "3.5"
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "3", features = ["full"] }

@@ -11,8 +11,14 @@ use crate::fresh_target;
 /// keep their signatures. Unannotated methods remain accessible through references to shard-local
 /// values, including inside `upgrade_in_shard` callbacks.
 /// Dispatched methods require `&self` and `Send + 'static` arguments and results.
-pub(crate) fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub(crate) fn asynchronize(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let runtime = crate::runtime_path();
+    let visibility = parse_macro_input!(attr as syn::Visibility);
     let mut item = parse_macro_input!(item as ItemImpl);
+    let item_cfg = match crate::attributes::conditions(&item.attrs) {
+        Ok(attrs) => attrs,
+        Err(e) => return e.to_compile_error().into(),
+    };
     if item.trait_.is_some() || !item.generics.params.is_empty() {
         return syn::Error::new_spanned(&item, "asynchronize requires a non-generic inherent impl")
             .to_compile_error()
@@ -28,7 +34,7 @@ pub(crate) fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream
     };
     let trait_name = format_ident!("{}Async", struct_name);
 
-    let (impl_generics, type_generics, where_clause) = item.generics.split_for_impl();
+    let (impl_generics, _type_generics, where_clause) = item.generics.split_for_impl();
 
     let mut action_method_signature = Vec::new();
     let mut action_method_implementation = Vec::new();
@@ -38,6 +44,10 @@ pub(crate) fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream
 
     for method in item.items.iter() {
         if let syn::ImplItem::Fn(method) = method {
+            let cfg = match crate::attributes::conditions(&method.attrs) {
+                Ok(attrs) => attrs,
+                Err(e) => return e.to_compile_error().into(),
+            };
             let annotated = method.attrs.iter().any(|a| {
                 a.path()
                     .segments
@@ -116,22 +126,25 @@ pub(crate) fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream
                         .collect();
                     action_method_signature.push(quote! {
                         /// Queue this method on the value's shard without waiting.
+                        #(#cfg)*
                         #(#docs)*
                         #trait_sig
                     });
 
                     let method_impl = if is_async {
                         quote! {
+                            #(#cfg)*
                             #trait_sig {
-                                ::eventful_rs::ShardHandle::upgrade_in_shard_async(self, async move |#target_ident| {
+                                #runtime::ShardHandle::upgrade_in_shard_async(self, async move |#target_ident| {
                                     #target_ident.#method_name(#(#method_arg_names,)*).await;
                                 });
                             }
                         }
                     } else {
                         quote! {
+                            #(#cfg)*
                             #trait_sig {
-                                ::eventful_rs::ShardHandle::upgrade_in_shard(self, move |#target_ident| {
+                                #runtime::ShardHandle::upgrade_in_shard(self, move |#target_ident| {
                                     #target_ident.#method_name(#(#method_arg_names,)*);
                                 });
                             }
@@ -177,22 +190,25 @@ pub(crate) fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream
                         .collect();
                     async_method_signature.push(quote! {
                         /// Await this method on the value's shard; panics on dispatch failure.
+                        #(#cfg)*
                         #(#docs)*
                         #trait_sig
                     });
 
                     let method_impl = if is_async {
                         quote! {
+                            #(#cfg)*
                             #trait_sig {
-                                ::eventful_rs::ShardHandle::deferred_upgrade_in_shard(self, async move |#target_ident| {
+                                #runtime::ShardHandle::deferred_upgrade_in_shard(self, async move |#target_ident| {
                                     #target_ident.#method_name(#(#method_arg_names,)*).await
                                 }).await
                             }
                         }
                     } else {
                         quote! {
+                            #(#cfg)*
                             #trait_sig {
-                                ::eventful_rs::ShardHandle::deferred_upgrade_in_shard(self, async move |#target_ident| {
+                                #runtime::ShardHandle::deferred_upgrade_in_shard(self, async move |#target_ident| {
                                     #target_ident.#method_name(#(#method_arg_names,)*)
                                 }).await
                             }
@@ -226,22 +242,26 @@ pub(crate) fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream
 
         /// Generated methods for dispatching calls through strong or weak handles.
         #[allow(async_fn_in_trait)]
-        pub trait #trait_name {
+        #(#item_cfg)*
+        #visibility trait #trait_name {
             #(#action_method_signature;)*
 
             #(#async_method_signature;)*
         }
 
-        impl #impl_generics #trait_name for ::eventful_rs::ShardWeakHandle<#struct_name #type_generics> #where_clause {
+        #(#item_cfg)*
+        impl #impl_generics #trait_name for #runtime::ShardWeakHandle<#struct_type> #where_clause {
             #(#action_method_implementation)*
 
             #(#async_method_implementation)*
         }
 
-        impl #impl_generics #trait_name for ::eventful_rs::ShardRcHandle<#struct_name #type_generics> #where_clause {
+        #(#item_cfg)*
+        impl #impl_generics #trait_name for #runtime::ShardRcHandle<#struct_type> #where_clause {
             #(#action_method_implementation)*
 
             #(#async_method_implementation)*
         }
-    }.into()
+    }
+    .into()
 }

@@ -2,7 +2,7 @@
 use std::thread;
 
 use eventful_rs::events;
-use eventful_rs::{EventLoop, ShardHandle, declare_shard, eventful};
+use eventful_rs::{EventLoop, ShardHandle, Sharded, declare_shard, eventful};
 
 use crate::monitor::MonitorShard;
 
@@ -74,11 +74,11 @@ mod monitor {
 }
 
 /// Publish three samples and stop the producer before draining its listener.
-fn main() {
+fn main() -> Result<(), eventful_rs::ShardError> {
     let source = DeviceShard::shard()
-        .bind(|sharded| sharded(Device::new("Warehouse scanner".to_owned())).as_handle());
+        .bind(|sharded| sharded(Device::new("Warehouse scanner".to_owned())).to_handle());
     let monitor =
-        MonitorShard::shard().bind(|sharded| sharded(monitor::Monitor::new()).as_handle());
+        MonitorShard::shard().bind(|sharded| sharded(monitor::Monitor::new()).to_handle());
 
     // Subscribe the listener to every event in TelemetryEvents.
     source.connect(&monitor);
@@ -89,6 +89,7 @@ fn main() {
         }
     });
 
-    DeviceShard::shard().join().unwrap();
-    monitor::MonitorShard::shard().join().unwrap();
+    DeviceShard::shard().join()?;
+    monitor::MonitorShard::shard().join()?;
+    Ok(())
 }

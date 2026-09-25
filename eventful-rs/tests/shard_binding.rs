@@ -63,7 +63,8 @@ fn named_affinity_scopes_factories_and_runtime_checks() {
                 assert_eq!(s.owner, std::thread::current().id());
                 assert_eq!(Rc::strong_count(&s.value), 1);
                 // Local conversion remains available for non-Send values.
-                let local: ShardRc<models::Local> = models::Local::new().into();
+                let local: ShardRc<models::Local> =
+                    ShardRc::try_bind(models::Local::new()).unwrap();
                 assert_eq!(*local.value, 42);
                 *s.value
             })
@@ -72,7 +73,7 @@ fn named_affinity_scopes_factories_and_runtime_checks() {
     );
 
     let second = block_on(Worker::bind_async(|bind| {
-        bind(models::Local::new()).as_handle()
+        bind(models::Local::new()).to_handle()
     }))
     .unwrap();
     assert!(state.join(&second).is_some());
@@ -82,13 +83,13 @@ fn named_affinity_scopes_factories_and_runtime_checks() {
     static CALLED: AtomicBool = AtomicBool::new(false);
     let result = block_on(Other::handle().bind_async(|bind| {
         CALLED.store(true, Ordering::SeqCst);
-        bind(models::Local::new()).as_handle()
+        bind(models::Local::new()).to_handle()
     }));
     assert!(matches!(result, Err(InvokeError::WrongShard)));
     assert!(!CALLED.load(Ordering::SeqCst));
     assert!(
         std::panic::catch_unwind(|| {
-            Other::shard().bind(|bind| bind(models::Local::new()).as_handle());
+            Other::shard().bind(|bind| bind(models::Local::new()).to_handle());
         })
         .is_err()
     );
@@ -96,7 +97,7 @@ fn named_affinity_scopes_factories_and_runtime_checks() {
     assert_eq!(
         block_on(
             Other::handle().try_deferred_invoke(other.clone(), async |_| {
-                Other::shard().bind(|bind| bind(models::Local::new()).as_handle());
+                Other::shard().bind(|bind| bind(models::Local::new()).to_handle());
             })
         ),
         Err(InvokeError::Panicked)

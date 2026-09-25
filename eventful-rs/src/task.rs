@@ -1,6 +1,7 @@
 //! Detached blocking work with cooperative cancellation.
 //! Callbacks run on the worker thread; use shard handles to update eventful values.
 /// Shared cooperative cancellation flag. Cancellation does not interrupt a running task.
+#[derive(Debug)]
 pub struct TaskCancellationToken {
     /// Atomic flag shared by workers and cancellation requesters.
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -43,7 +44,10 @@ impl Default for TaskCancellationToken {
 /// Spawn one detached OS thread and deliver a successful result on that thread.
 /// The task must poll its token to stop early. `None` suppresses the callback.
 /// Cancellation is checked before calling back; racing cancellation cannot revoke a callback.
-/// Panics terminate this detached thread and are not returned to the caller.
+/// Task or callback panics terminate the detached thread and are not returned.
+///
+/// # Panics
+/// Panics if the operating system cannot create the worker thread.
 ///
 /// ```
 /// use eventful_rs::task::{run_task, TaskCancellationToken};
@@ -51,8 +55,9 @@ impl Default for TaskCancellationToken {
 /// run_task(|token| {
 ///     if token.is_cancelled() { return None; }
 ///     Some("product,quantity\napple,12".lines().skip(1).count())
-/// }, move |rows| { tx.send(rows).unwrap(); }, TaskCancellationToken::new());
-/// assert_eq!(rx.recv().unwrap(), 1);
+/// }, move |rows| { let _ = tx.send(rows); }, TaskCancellationToken::new());
+/// assert_eq!(rx.recv()?, 1);
+/// # Ok::<(), std::sync::mpsc::RecvError>(())
 /// ```
 pub fn run_task<F, C, R>(task: F, callback: C, ct: TaskCancellationToken)
 where

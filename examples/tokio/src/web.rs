@@ -18,7 +18,7 @@ pub struct WebClient {
     /// Last successfully downloaded URL.
     last_url: RefCell<Option<String>>,
 }
-#[asynchronize]
+#[asynchronize(pub)]
 impl WebClient {
     /// Construct this example value and initialize its event storage.
     pub async fn new() -> Result<ShardRcHandle<Self>, InvokeError> {

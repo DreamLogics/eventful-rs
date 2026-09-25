@@ -46,28 +46,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A real HTTP request, served locally: deterministic and usable offline.
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let url = format!("http://{}/", listener.local_addr()?);
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
+    let server = std::thread::spawn(move || -> std::io::Result<()> {
+        let (mut stream, _) = listener.accept()?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
         let mut request = [0; 4096];
-        let _ = stream.read(&mut request).unwrap();
+        let _ = stream.read(&mut request)?;
         let body = "hello from the local server";
         write!(
             stream,
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
-        )
-        .unwrap();
+        )?;
+        Ok(())
     });
     Main::shard().run_main(move || async move {
-        let app = App::new().await.unwrap();
-        app.run(url.clone()).await.unwrap();
+        let app = App::new().await?;
+        app.run(url.clone()).await?;
         assert_eq!(app.last_url().await, Some(url));
         println!("HTTP example complete");
-    });
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
     WebShard::shard().join()?;
-    server.join().unwrap();
+    server.join().map_err(|_| "HTTP server thread panicked")??;
     Ok(())
 }

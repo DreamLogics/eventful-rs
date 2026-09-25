@@ -9,6 +9,10 @@ static SHARD_REGISTRY: Mutex<Vec<(ShardId, JoinCallback)>> = Mutex::new(Vec::new
 
 /// Stop and join registered background shards without holding the registry lock.
 /// Call from synchronous code, after producers have finished submitting work.
+///
+/// # Errors
+/// Returns [`ShardError::JoinError`] on a shard thread, inside Tokio, or when
+/// any background join fails. Failed joins remain registered for retry.
 pub fn join_all_shards() -> Result<(), ShardError> {
     if engine::on_shard_thread() {
         return Err(ShardError::JoinError(
@@ -46,6 +50,13 @@ fn join_all_shards_blocking() -> Result<(), ShardError> {
 }
 
 /// Join background shards without blocking a Tokio worker.
+///
+/// # Errors
+/// Returns [`ShardError::JoinError`] on a shard thread or if a background join
+/// or the Tokio blocking task fails.
+///
+/// # Panics
+/// Panics when called outside a Tokio runtime.
 #[cfg(feature = "tokio")]
 pub async fn join_all_shards_async() -> Result<(), ShardError> {
     if engine::on_shard_thread() {

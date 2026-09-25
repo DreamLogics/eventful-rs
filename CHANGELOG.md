@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Align the public API with the Rust API Guidelines: add unconditional `Debug`
+  implementations for runtime handles, make identity and event storage read-only,
+  seal the internal dispatch contract, and mark error enums non-exhaustive.
+- Preserve conditional compilation and visibility in generated items and support
+  renamed runtime dependencies. Add regression coverage for these macro contracts.
+
+### API guideline migration (breaking)
+
+- Replace `as_handle()` with `to_handle()` and import `Sharded`.
+- Replace local `ShardRc::from(value)` / `.into()` with `ShardRc::try_bind(value)?`.
+  Replace remote handle conversions with `T::spawn(factory).await?`.
+- Use `ShardRc::connect(&local, &listener)` for local bulk subscriptions.
+- Read backend identity through `shard_id()` and events through `events()`;
+  access generated signals through methods instead of event-set fields.
+  Weak `events()` now returns `Option<Arc<_>>`.
+- Export generated dispatch traits explicitly with `#[asynchronize(pub)]` or a
+  restricted visibility when they must be imported from another module.
+- Match `InvokeError` and `ShardError` with a fallback arm for future variants.
+
 - Update the optional Slint backend to Slint 1.18 (locked to 1.18.1).
 
 - Preserve event-interface visibility on generated extension traits so private
@@ -47,8 +66,8 @@
 | One eventful type bound to arbitrary instances | Explicit `type Shard = DynamicShard` or `#[eventful(shard = DynamicShard)]` |
 
 `bind` and `bind_async` remain useful for runtime-selected shards and compound
-factories. The `From` conversions remain convenience APIs with distinct bounds:
-local `ShardRc` conversion needs no `Send`; cross-thread handle conversion does.
+factories. Local binding uses the fallible `ShardRc::try_bind`; cross-thread
+construction uses a factory.
 Runtime shard-ID checks and `join` checks remain necessary for erased handles and
 dynamic values. Backend handle aliases remain available.
 

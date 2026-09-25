@@ -19,7 +19,7 @@ pub struct Importer {
     count: Cell<usize>,
 }
 
-#[asynchronize]
+#[asynchronize(pub)]
 impl Importer {
     /// Construct local state on the declared worker.
     pub async fn new() -> Result<ShardRcHandle<Self>, InvokeError> {

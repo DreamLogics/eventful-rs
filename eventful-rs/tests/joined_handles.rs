@@ -32,7 +32,7 @@ fn counter(shard: &impl EventLoop<HandleType = ShardEventHandle>) -> ShardRcHand
             value: Cell::new(0),
             events: Arc::new(()),
         })
-        .as_handle()
+        .to_handle()
     })
 }
 
@@ -43,7 +43,7 @@ fn exercise(shard: &impl EventLoop<HandleType = ShardEventHandle>) {
             text: Rc::new("hello".into()),
             events: Arc::new(()),
         })
-        .as_handle()
+        .to_handle()
     });
     let owner = block_on(
         shard

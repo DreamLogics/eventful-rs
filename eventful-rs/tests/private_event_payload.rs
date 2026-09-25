@@ -41,7 +41,7 @@ fn private_payloads_support_tracked_dispatch() {
             count: std::cell::Cell::new(0),
             events: Default::default(),
         })
-        .as_handle()
+        .to_handle()
     });
     let _plain = listener.changed().connect(&listener).scoped();
     let _labelled = listener

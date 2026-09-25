@@ -18,11 +18,13 @@ pub trait ShardAffinity: 'static {
 /// struct Session;
 /// let worker = shard::Shard::new("session-worker");
 /// let session = futures::executor::block_on(worker.bind_async(|bind| {
-///     bind(Session { events: Default::default() }).as_handle()
-/// })).unwrap();
+///     bind(Session { events: Default::default() }).to_handle()
+/// }))?;
 /// drop(session);
-/// worker.join().unwrap();
+/// worker.join()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DynamicShard {}
 impl ShardAffinity for DynamicShard {
     /// Return the required shard identity, or `None` for dynamic affinity.
@@ -54,65 +56,6 @@ impl<S: ShardBinding> ShardAffinity for S {
         use crate::EventLoopHandle;
         Some(Self::handle().shard_id())
     }
-}
-
-/// Declare a shard marker and its lazily initialized singleton.
-///
-/// ```
-/// use eventful_rs::*;
-/// declare_shard!(pub Worker, runtime = std);
-/// #[eventful(shard = Worker)]
-/// struct State;
-/// let value = futures::executor::block_on(State::spawn(|| State {
-///     events: Default::default(),
-/// })).unwrap();
-/// Worker::shard().join().unwrap();
-/// ```
-///
-/// Runtimes: std, tokio, main, tokio_main, slint. Tokio and Slint require their
-/// respective features. Initialize calling-thread/UI shards on their owner
-/// thread via Marker::shard() before submitting work from other threads.
-/// This macro does not select a default for surrounding eventful declarations.
-#[macro_export]
-macro_rules! declare_shard {
-    ($vis:vis $name:ident, runtime = std) => {
-        $crate::declare_shard!(@impl $vis $name, $crate::shard::Shard,
-            $crate::shard::Shard::new(stringify!($name)));
-    };
-    ($vis:vis $name:ident, runtime = tokio) => {
-        $crate::declare_shard!(@impl $vis $name, $crate::tokio::TokioShard,
-            $crate::tokio::TokioShard::new(stringify!($name)));
-    };
-    ($vis:vis $name:ident, runtime = main) => {
-        $crate::declare_shard!(@impl $vis $name, $crate::local::LocalShard,
-            $crate::local::LocalShard::new());
-    };
-    ($vis:vis $name:ident, runtime = tokio_main) => {
-        $crate::declare_shard!(@impl $vis $name, $crate::tokio_local::TokioLocalShard,
-            $crate::tokio_local::TokioLocalShard::new(stringify!($name)));
-    };
-    ($vis:vis $name:ident, runtime = slint) => {
-        $crate::declare_shard!(@impl $vis $name, $crate::slint::SlintShard,
-            $crate::slint::SlintShard::new());
-    };
-    (@impl $vis:vis $name:ident, $backend:ty, $init:expr) => {
-        /// Marker for a lazily initialized singleton shard.
-        $vis enum $name {}
-        impl $name {
-            /// Access the singleton backend, initializing it on first use.
-            $vis fn shard() -> &'static $backend {
-                static SHARD: ::std::sync::LazyLock<$backend> =
-                    ::std::sync::LazyLock::new(|| $init);
-                &SHARD
-            }
-        }
-        impl $crate::ShardBinding for $name {
-            /// Access the singleton submission handle, initializing its backend if needed.
-    fn handle() -> $crate::ShardEventHandle {
-                $crate::EventLoop::handle(Self::shard())
-            }
-        }
-    };
 }
 
 /// Select the default shard for eventful types in the current module/file.

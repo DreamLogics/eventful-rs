@@ -12,7 +12,7 @@ Slint's font discovery dependency uses `pkg-config` to locate `fontconfig.pc`.
 The core/default library and MSRV checks do not need these packages.
 
 Run `./scripts/check.sh` on stable Rust. It checks formatting, all example binaries,
-core/default/all-feature tests, public and private API documentation, Clippy,
+core/default/all-feature tests, renamed dependencies, public and private API documentation, Clippy,
 rustdoc links, and both packaged crates. Generated documentation is at
 `target/doc/eventful_rs/index.html`; use `cargo doc -p eventful-rs --all-features
 --no-deps --open` to browse it. Build artifacts remain untracked.
@@ -34,7 +34,9 @@ workspace examples and test dependencies are validated on stable Rust.
    README identical; the detailed guide lives in `eventful-rs/GUIDE.md`.
 2. Commit the release and run `./scripts/check.sh`. Packaging requires a clean
    working tree. During review, `cargo package -p eventful-rs-macros -p eventful-rs
-   --locked --allow-dirty` verifies the current files without publishing.
+   --locked --allow-dirty` verifies the current files without publishing. If Cargo
+   reuses an older macro tarball at the same version during repeated local checks,
+   add `--target-dir "$(mktemp -d)"` to verify against a fresh temporary registry.
 3. With crates.io credentials configured, publish in dependency order:
 
    ```sh
@@ -59,4 +61,7 @@ workspace examples and test dependencies are validated on stable Rust.
   Public backend modules (`shard`, `local`, `tokio`, `tokio_local`, `slint`) are thin adapters.
 - `task.rs`: detached blocking work and cooperative cancellation.
 - `eventful-rs-macros/src`: public entry points in `lib.rs`, expansion logic grouped
-  into `events`, `dispatch`, `affinity`, and `entry`.
+  into `events`, `dispatch`, `affinity`, `declaration`, and `entry`; `attributes`
+  handles conditional compilation.
+
+See [the changelog](CHANGELOG.md) for migration instructions.

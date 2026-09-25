@@ -1,5 +1,5 @@
 //! Validated groups of strong handles for access on a shared shard.
-use super::{ShardHandleInternal, ShardRcHandle};
+use super::{ShardRcHandle, sealed::Sealed};
 use crate::{Eventful, HasEvents, InvokeError};
 use futures::{FutureExt, channel::oneshot};
 use std::panic::AssertUnwindSafe;
@@ -38,10 +38,10 @@ where
     /// let (foo, bar) = Counters::shard().bind(|bind| {
     ///     let make = || bind(Counter {
     ///         value: Cell::new(0), events: Default::default(),
-    ///     }).as_handle();
+    ///     }).to_handle();
     ///     (make(), make())
     /// });
-    /// let joined = foo.join(&bar).expect("same shard");
+    /// let joined = foo.join(&bar).ok_or("different shards")?;
     /// joined.upgrade_in_shard(|(foo, bar)| {
     ///     foo.value.set(1);
     ///     bar.value.set(2);
@@ -52,7 +52,8 @@ where
     ///     }),
     /// );
     /// assert_eq!(sum, 3);
-    /// Counters::shard().join().unwrap();
+    /// Counters::shard().join()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn join<U>(
         &self,

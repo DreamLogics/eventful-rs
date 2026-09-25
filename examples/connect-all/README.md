@@ -23,6 +23,6 @@ background shards when the example finishes.
 
 These calls use a remote `ShardRcHandle`. When called on a local `ShardRc`,
 `connect` additionally ties the group to the underlying value: constructors can
-call `window.connect(&manager);` and discard the token, and all subscriptions
+call `ShardRc::connect(&window, &manager);` and discard the token, and all subscriptions
 are removed when that window value is destroyed. Clones and in-flight callbacks
 keep the value alive; retaining its event set alone does not retain subscriptions.

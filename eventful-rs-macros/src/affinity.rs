@@ -130,6 +130,7 @@ fn apply_scope(items: &mut [syn::Item], shard: &syn::Path) -> syn::Result<()> {
 /// module must declare `file_scope!(shard = Marker);`.
 /// Initialize the generated field with `events: Default::default()`.
 pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let runtime = crate::runtime_path();
     let mut item = parse_macro_input!(item as ItemStruct);
     if !item.generics.params.is_empty() {
         return syn::Error::new_spanned(
@@ -140,6 +141,11 @@ pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
     let struct_name = &item.ident;
+    let visibility = &item.vis;
+    let item_cfg = match crate::attributes::conditions(&item.attrs) {
+        Ok(attrs) => attrs,
+        Err(e) => return e.to_compile_error().into(),
+    };
     let args = parse_macro_input!(attr as EventfulArgs);
     let needs_to_gen_trait = args.events.is_none();
     let trait_name = args.events.unwrap_or_else(|| {
@@ -165,13 +171,13 @@ pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
     match &mut item.fields {
         syn::Fields::Named(fields) => {
             fields.named.push(syn::parse_quote! {
-                #set_field: std::sync::Arc<#set_name>
+                #set_field: ::std::sync::Arc<#set_name>
             });
         }
 
         syn::Fields::Unit => {
             let fields: syn::FieldsNamed = syn::parse_quote!({
-                #set_field: std::sync::Arc<#set_name>
+                #set_field: ::std::sync::Arc<#set_name>
             });
 
             item.fields = syn::Fields::Named(fields);
@@ -187,28 +193,34 @@ pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let shard = args
         .shard
-        .unwrap_or_else(|| parse_quote!(self::__EventfulFileShard));
+        .unwrap_or_else(|| parse_quote!(__EventfulFileShard));
 
     let gen_trait = if needs_to_gen_trait {
         let trait_ident_set = format_ident!("{}EventsEventSet", struct_name);
         quote! {
             /// Empty event interface for a value with no declared signals.
-            pub trait #trait_ident {}
+            #(#item_cfg)*
+            #visibility trait #trait_ident {}
 
             /// Empty signal storage for this eventful value.
-            pub struct #trait_ident_set {}
+            /// See [`eventful_rs::eventful`] for construction examples.
+            #(#item_cfg)*
+            #[derive(Debug)]
+            #visibility struct #trait_ident_set {}
 
-            impl<T> ::eventful_rs::ConnectEvents<T> for #trait_ident_set
+            #(#item_cfg)*
+            impl<T> #runtime::ConnectEvents<T> for #trait_ident_set
             where
-                T: ::eventful_rs::Eventful + ::eventful_rs::HasEvents<T::EventSetType> + 'static,
+                T: #runtime::Eventful + #runtime::HasEvents<T::EventSetType> + 'static,
             {
-                fn connect_events<S: ::eventful_rs::Sharded<T>>(&self, _target: &S)
-                    -> ::eventful_rs::ConnectionGroup
+                fn connect_events<S: #runtime::Sharded<T>>(&self, _target: &S)
+                    -> #runtime::ConnectionGroup
                 {
-                    ::eventful_rs::ConnectionGroup::default()
+                    #runtime::ConnectionGroup::default()
                 }
             }
 
+            #(#item_cfg)*
             impl Default for #trait_ident_set {
                 fn default() -> Self {
                     #trait_ident_set {}
@@ -225,16 +237,18 @@ pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
         #item
 
 
-        impl #impl_generics ::eventful_rs::HasEvents<#set_name>
+        #(#item_cfg)*
+        impl #impl_generics #runtime::HasEvents<#set_name>
             for #struct_name #type_generics
             #where_clause
         {
-            fn #set_field(&self) -> &std::sync::Arc<#set_name> {
+            fn #set_field(&self) -> &::std::sync::Arc<#set_name> {
                 &self.#set_field
             }
         }
 
-        impl #impl_generics ::eventful_rs::Eventful
+        #(#item_cfg)*
+        impl #impl_generics #runtime::Eventful
             for #struct_name #type_generics #where_clause
         {
             type EventSetType = #set_name;

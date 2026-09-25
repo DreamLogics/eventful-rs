@@ -1,9 +1,11 @@
 #![doc = include_str!("../GUIDE.md")]
 #![forbid(unsafe_code)]
-#![deny(missing_docs)]
+#![deny(missing_docs, missing_debug_implementations)]
+
+extern crate self as eventful_rs;
 
 pub use eventful_rs_macros::{
-    action, asynced, asynchronize, eventful, events, scope, sharded_main,
+    action, asynced, asynchronize, declare_shard, eventful, events, scope, sharded_main,
 };
 
 mod binding;

@@ -70,7 +70,7 @@ impl<Args, Label> EventInternal<Args, Label> {
     /// Remove under the lock, but run captured user destructors after releasing it.
     pub(crate) fn disconnect(&self, id: usize) {
         let removed = {
-            let mut connections = self.connections.lock().unwrap();
+            let mut connections = self.connections.lock().unwrap_or_else(|e| e.into_inner());
             connections
                 .iter()
                 .position(|c| c.id == id)
@@ -86,6 +86,29 @@ impl<Args, Label> EventInternal<Args, Label> {
 /// [`EventLabel`] through [`Self::emit_labelled`] and [`Self::emit_labelled_tracked`].
 /// Wildcard subscriptions created with [`Self::add_connection`] or
 /// [`Self::add_tracked_connection`] receive every emission.
+///
+/// # Example
+///
+/// For application objects, prefer the [typed interface example](crate#quick-start).
+/// Raw events also support inline callbacks and explicit subscription lifetimes:
+///
+/// ```
+/// use eventful_rs::{Event, ConnectionGroup};
+/// use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+/// let received = Arc::new(AtomicUsize::new(0));
+/// let total = received.clone();
+/// let updates = Event::<usize>::default();
+/// let subscription = updates.add_connection(move |count| {
+///     total.fetch_add(count, Ordering::Relaxed);
+/// });
+/// let group: ConnectionGroup = [subscription].into_iter().collect();
+/// let scope = group.scoped();
+/// futures::executor::block_on(updates.emit_tracked(3))?;
+/// assert_eq!(received.load(Ordering::Relaxed), 3);
+/// drop(scope);
+/// assert_eq!(updates.connection_count(), 0);
+/// # Ok::<(), eventful_rs::DeliveryError>(())
+/// ```
 pub struct Event<Args, Label = ()> {
     /// Shared subscription storage for a signal signature and label type.
     internal: Arc<EventInternal<Args, Label>>,
@@ -117,6 +140,9 @@ where
 {
     /// Subscribe an inline callback to all emissions. Dropping the token keeps it active.
     /// The callback runs on the emitting thread; panics propagate on untracked emission.
+    ///
+    /// # Panics
+    /// Panics if this event has exhausted its connection identities.
     pub fn add_connection<F>(&self, connection: F) -> Connection<Args, Label>
     where
         F: Fn(Args) + Send + Sync + 'static,
@@ -135,6 +161,9 @@ where
     /// Register ordinary dispatch and tracked dispatch for the same connection.
     /// Tracked dispatch must submit work immediately; its returned future observes
     /// completion. Dropping that future should not cancel the submitted work.
+    ///
+    /// # Panics
+    /// Panics if this event has exhausted its connection identities.
     pub fn add_tracked_connection<F, G, Fut>(&self, emit: F, tracked: G) -> Connection<Args, Label>
     where
         F: Fn(Args) + Send + Sync + 'static,
@@ -149,6 +178,9 @@ where
     /// thread before arguments are cloned or delivery callbacks are invoked.
     /// Matching runs outside the connection lock. Labels need not be `Clone`.
     /// Tracked callbacks must submit immediately, as in `add_tracked_connection`.
+    ///
+    /// # Panics
+    /// Panics if this event has exhausted its connection identities.
     pub fn add_labelled_tracked_connection<F, G, Fut>(
         &self,
         label: Option<Label>,
@@ -160,13 +192,19 @@ where
         G: Fn(Args) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<(), DeliveryError>> + Send + 'static,
     {
-        let mut last_id = self.internal.last_id.lock().unwrap();
+        let mut last_id = self
+            .internal
+            .last_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let id = *last_id;
-        *last_id += 1;
+        *last_id = last_id
+            .checked_add(1)
+            .expect("connection identity space exhausted");
         self.internal
             .connections
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .push(Arc::new(EventConnectionRecord {
                 id,
                 label,
@@ -178,9 +216,17 @@ where
 
     /// Dispatch only to wildcard and matching subscriptions, once per connection.
     /// Matching scans a connection snapshot and calls `subscription.matches(&label)`
-    /// on the emitting thread. A matching panic propagates to the caller.
+    /// on the emitting thread.
+    ///
+    /// # Panics
+    /// Propagates panics from label matching, payload cloning, and inline callbacks.
     pub fn emit_labelled(&self, label: Label, args: Args) {
-        let snapshot = self.internal.connections.lock().unwrap().clone();
+        let snapshot = self
+            .internal
+            .connections
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         for connection in snapshot {
             if connection
                 .label
@@ -200,6 +246,10 @@ where
     /// independently spawn is not tracked. Rejected subscriptions are successful
     /// skips, even when their destination shard is closed. Matching panics are
     /// reported as `DeliveryError::Panicked`; other connections are still processed.
+    ///
+    /// # Errors
+    /// Returns the first handler delivery error, or [`DeliveryError::Panicked`]
+    /// for unwinding label, clone, or callback panics.
     pub fn emit_labelled_tracked(
         &self,
         label: Label,
@@ -208,7 +258,12 @@ where
         use futures::FutureExt;
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
-        let snapshot = self.internal.connections.lock().unwrap().clone();
+        let snapshot = self
+            .internal
+            .connections
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let mut deliveries = Vec::with_capacity(snapshot.len());
         for connection in snapshot {
             let delivery = catch_unwind(AssertUnwindSafe(|| {
@@ -246,22 +301,76 @@ where
 
     /// Number of registered subscriptions, including expired weak targets.
     pub fn connection_count(&self) -> usize {
-        self.internal.connections.lock().unwrap().len()
+        self.internal
+            .connections
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
     }
 }
 
 impl<Args: Clone + Send + 'static> Event<Args> {
     /// Dispatch an unlabelled event to a snapshot of its connections.
+    /// See the [`Event`] example for subscription setup.
+    ///
+    /// # Panics
+    /// Propagates panics from payload cloning and inline callbacks.
     pub fn emit(&self, args: Args) {
         self.emit_labelled((), args);
     }
 
     /// Dispatch immediately and observe completion of all snapshot deliveries.
     /// Panics are reported as errors; dropping the future does not cancel delivery.
+    /// See the [`Event`] example.
+    ///
+    /// # Errors
+    /// Returns the first delivery error, including [`DeliveryError::Panicked`]
+    /// for unwinding clone or callback panics.
     pub fn emit_tracked(
         &self,
         args: Args,
     ) -> impl Future<Output = Result<(), DeliveryError>> + Send + 'static + use<Args> {
         self.emit_labelled_tracked((), args)
+    }
+}
+
+impl<Args, Label> std::fmt::Debug for Event<Args, Label> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Event")
+            .field(
+                "subscriptions",
+                &self
+                    .internal
+                    .connections
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .len(),
+            )
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Event;
+
+    #[test]
+    fn scoped_cleanup_recovers_a_poisoned_subscription_lock() {
+        let event = Event::<()>::default();
+        let guard = event.add_connection(|()| {}).scoped();
+        let _ = std::panic::catch_unwind(|| {
+            let _lock = event.internal.connections.lock().unwrap();
+            panic!("poison subscription storage");
+        });
+        drop(guard);
+        assert_eq!(event.connection_count(), 0);
+    }
+
+    #[test]
+    fn exhausted_connection_ids_never_wrap() {
+        let event = Event::<()>::default();
+        *event.internal.last_id.lock().unwrap() = usize::MAX;
+        assert!(std::panic::catch_unwind(|| event.add_connection(|()| {})).is_err());
+        assert_eq!(event.connection_count(), 0);
     }
 }

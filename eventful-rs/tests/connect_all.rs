@@ -47,13 +47,13 @@ fn bulk_connections_deliver_and_disconnect_through_local_strong_and_weak_sources
             owner: std::thread::current().id(),
             events: Default::default(),
         })
-        .as_handle()
+        .to_handle()
     });
     let source = a.bind(|bind| {
         bind(Source {
             events: Default::default(),
         })
-        .as_handle()
+        .to_handle()
     });
     let retained = source.count().connect(&target);
     let group = source.connect(&target);
@@ -89,8 +89,8 @@ fn bulk_connections_deliver_and_disconnect_through_local_strong_and_weak_sources
         let local = bind(Source {
             events: Default::default(),
         });
-        let group = local.connect(&destination);
-        (local.as_handle(), group)
+        let group = ShardRc::connect(&local, &destination);
+        (local.to_handle(), group)
     });
     emit(&local_source);
     assert_eq!(*log.lock().unwrap(), ["name", "7", "done"]);
@@ -106,7 +106,7 @@ fn bulk_connections_deliver_and_disconnect_through_local_strong_and_weak_sources
             owner: std::thread::current().id(),
             events: Default::default(),
         });
-        local.connect(&local).disconnect();
+        ShardRc::connect(&local, &local).disconnect();
     });
     drop(source);
     a.join().unwrap();
@@ -122,7 +122,7 @@ fn groups_do_not_keep_targets_alive() {
         bind(Source {
             events: Default::default(),
         })
-        .as_handle()
+        .to_handle()
     });
     let target = b.bind(|bind| {
         bind(Listener {
@@ -130,10 +130,10 @@ fn groups_do_not_keep_targets_alive() {
             owner: std::thread::current().id(),
             events: Default::default(),
         })
-        .as_handle()
+        .to_handle()
     });
     let group = source.connect(&target);
-    let weak_events = Arc::downgrade(&target.events);
+    let weak_events = Arc::downgrade(target.events());
     drop(target);
     b.join().unwrap();
     assert!(weak_events.upgrade().is_none());

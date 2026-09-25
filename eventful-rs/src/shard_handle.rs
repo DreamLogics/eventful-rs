@@ -8,21 +8,17 @@ pub(crate) use store::{ShardRcId, ShardRcStore};
 mod joined;
 pub use joined::JoinedHandles;
 
-#[doc(hidden)]
-pub trait ShardHandleInternal<T>
-where
-    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
-{
-    fn id(&self) -> usize;
-    fn shard_id(&self) -> crate::ShardId;
-}
+mod sealed;
+use sealed::Sealed;
 
 /// Dispatch work to a value's shard through a thread-safe handle.
+/// See the [calling methods guide](crate#calling-methods).
 ///
 /// The callbacks receive local references on the value's owner thread. They can
 /// call ordinary methods that have no generated handle wrapper.
+/// This trait is sealed: only the built-in strong and weak handles implement it.
 #[allow(async_fn_in_trait)]
-pub trait ShardHandle<T>: ShardHandleInternal<T> + Clone + Send + Sync + 'static
+pub trait ShardHandle<T>: Sealed<T> + Clone + Send + Sync + 'static
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
@@ -43,9 +39,12 @@ where
 
     /// Await a callback's result while it runs on the value's shard.
     ///
-    /// Submission starts when this future is polled. The built-in backend panics
-    /// if the result cannot be delivered. Untracked events emitted by the callback
-    /// may still be pending when this returns.
+    /// Submission starts when this future is polled. Untracked events emitted by
+    /// the callback may still be pending when this returns.
+    ///
+    /// # Panics
+    /// Panics if the result cannot be delivered; use the weak handle
+    /// [`ShardWeakHandle::try_deferred_upgrade_in_shard`] for fallible dispatch.
     async fn deferred_upgrade_in_shard<F, R>(&self, task: F) -> R
     where
         F: AsyncFnOnce(&T) -> R + Send + 'static,
@@ -58,12 +57,15 @@ where
 }
 
 /// Convert a local value or remote handle into a dispatch handle.
+/// See the [`crate::DynamicShard`] construction example.
 pub trait Sharded<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
+    /// Concrete owned handle returned by this value.
+    type Handle: ShardHandle<T>;
     /// Clone a handle suitable for cross-thread dispatch.
-    fn as_handle(&self) -> impl ShardHandle<T>;
+    fn to_handle(&self) -> Self::Handle;
 }
 
 // Keep lifetime-bound subscriptions in the same Rc allocation as the value.
@@ -101,8 +103,8 @@ impl<T: std::fmt::Debug> std::fmt::Debug for ShardValue<T> {
 }
 
 /// Strong, owner-thread reference to a value. This reference cannot cross threads.
-/// Dereferences to the value; use [`Self::as_handle`] for remote access.
-#[derive(Debug)]
+/// See the [`crate::DynamicShard`] construction example.
+/// Dereferences to the value; use [`Sharded::to_handle`] for remote access.
 pub struct ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
@@ -114,7 +116,7 @@ where
     /// Admission handle for the value owner.
     shard_handle: crate::ShardEventHandle,
     /// Shared typed signal interface. Keeping it alive does not retain the value.
-    pub events: Arc<T::EventSetType>,
+    events: Arc<T::EventSetType>,
 }
 
 impl<T> ShardRc<T>
@@ -135,29 +137,19 @@ where
             events,
         }
     }
+}
 
-    /// Clone a strong handle without moving the shard-local value.
-    pub fn as_handle(&self) -> ShardRcHandle<T> {
+impl<T> Sharded<T> for ShardRc<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    type Handle = ShardRcHandle<T>;
+    fn to_handle(&self) -> Self::Handle {
         ShardRcHandle {
             id: self.id.clone(),
             shard_handle: self.shard_handle.clone(),
             events: self.events.clone(),
         }
-    }
-
-    /// Borrow the shared typed signal interface.
-    pub fn events(&self) -> &Arc<T::EventSetType> {
-        &self.events
-    }
-}
-
-impl<T> Sharded<T> for ShardRc<T>
-where
-    T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
-{
-    /// Clone a handle suitable for cross-thread dispatch.
-    fn as_handle(&self) -> impl ShardHandle<T> {
-        self.as_handle()
     }
 }
 
@@ -173,8 +165,8 @@ where
 }
 
 /// Strong thread-safe handle retaining a value while its shard is running.
+/// See the [quick start](crate#quick-start) and [`Self::join`] example.
 /// Shutdown destroys the store even when handles remain alive.
-#[derive(Debug)]
 pub struct ShardRcHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
@@ -184,7 +176,7 @@ where
     /// Admission handle for the value owner.
     shard_handle: crate::ShardEventHandle,
     /// Shared typed signal interface. Keeping it alive does not retain the value.
-    pub events: Arc<T::EventSetType>,
+    events: Arc<T::EventSetType>,
 }
 
 impl<T> Clone for ShardRcHandle<T>
@@ -200,7 +192,7 @@ where
     }
 }
 
-impl<T> ShardHandleInternal<T> for ShardRcHandle<T>
+impl<T> Sealed<T> for ShardRcHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
@@ -256,15 +248,15 @@ impl<T> Sharded<T> for ShardRcHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
-    /// Clone a handle suitable for cross-thread dispatch.
-    fn as_handle(&self) -> impl ShardHandle<T> {
+    type Handle = Self;
+    fn to_handle(&self) -> Self::Handle {
         self.clone()
     }
 }
 
 /// Thread-safe handle that does not retain its target or event storage.
+/// See the [calling methods guide](crate#calling-methods).
 /// Untracked calls skip expired targets; tracked calls report delivery failures.
-#[derive(Debug)]
 pub struct ShardWeakHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
@@ -274,7 +266,7 @@ where
     /// Admission handle for the value owner.
     shard_handle: crate::ShardEventHandle,
     /// Weak reference to the typed signal interface.
-    pub events: std::sync::Weak<T::EventSetType>,
+    events: std::sync::Weak<T::EventSetType>,
 }
 
 impl<T> Clone for ShardWeakHandle<T>
@@ -290,7 +282,7 @@ where
     }
 }
 
-impl<T> ShardHandleInternal<T> for ShardWeakHandle<T>
+impl<T> Sealed<T> for ShardWeakHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
@@ -306,7 +298,16 @@ impl<T> ShardWeakHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
+    /// Upgrade the weak event-storage reference without retaining the target value.
+    pub fn events(&self) -> Option<Arc<T::EventSetType>> {
+        self.events.upgrade()
+    }
+
     /// Submit immediately and observe completion, including delivery failures.
+    ///
+    /// # Errors
+    /// Returns [`crate::InvokeError`] for a closed shard, expired or mismatched
+    /// target, canceled callback, or an unwinding panic in the callback.
     pub fn try_deferred_upgrade_in_shard<F, R>(
         &self,
         task: F,
@@ -359,8 +360,8 @@ impl<T> Sharded<T> for ShardWeakHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
-    /// Clone a handle suitable for cross-thread dispatch.
-    fn as_handle(&self) -> impl ShardHandle<T> {
+    type Handle = Self;
+    fn to_handle(&self) -> Self::Handle {
         self.clone()
     }
 }
@@ -379,42 +380,29 @@ where
     }
 }
 
-impl<T> From<T> for ShardRc<T>
+impl<T> ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + 'static,
     T::Shard: crate::ShardBinding,
 {
-    fn from(value: T) -> Self {
+    /// Bind a value in its named shard's current execution context.
+    ///
+    /// # Errors
+    /// Returns [`crate::InvokeError::WrongShard`] outside that context.
+    /// Use [`Eventful::spawn`] to construct from another thread.
+    ///
+    /// # Panics
+    /// A custom shard binding may panic while obtaining its singleton handle.
+    pub fn try_bind(value: T) -> Result<Self, crate::InvokeError> {
         let handle = <T::Shard as crate::ShardBinding>::handle();
-        if crate::engine::has_context(handle.shard_id) {
-            crate::engine::bind_here(&crate::engine::store(handle.shard_id), handle, |bind| {
-                bind(value)
-            })
-        } else {
-            panic!("may only create ShardRc within the same shard that T was declared in");
+        if !crate::engine::has_context(handle.shard_id) {
+            return Err(crate::InvokeError::WrongShard);
         }
-    }
-}
-
-impl<T> From<T> for ShardRcHandle<T>
-where
-    T: Eventful + HasEvents<T::EventSetType> + Send + 'static,
-    T::Shard: crate::ShardBinding,
-{
-    fn from(value: T) -> Self {
-        let handle = <T::Shard as crate::ShardBinding>::handle();
-        if crate::engine::has_context(handle.shard_id) {
-            crate::engine::bind_here(&crate::engine::store(handle.shard_id), handle, |bind| {
-                bind(value).as_handle()
-            })
-        } else {
-            crate::engine::assert_not_async(
-                "conversion to shard handle blocks; use bind_async from Tokio",
-            );
-            handle
-                .bind_blocking_factory(|bind| bind(value).as_handle())
-                .expect("binding failed")
-        }
+        Ok(crate::engine::bind_here(
+            &crate::engine::store(handle.shard_id),
+            handle,
+            |bind| bind(value),
+        ))
     }
 }
 impl<T> HasEvents<T::EventSetType> for ShardRc<T>
@@ -444,14 +432,14 @@ where
     /// while its shard runs. Dropping the returned token does not disconnect;
     /// use disconnect() or scoped() for earlier cleanup.
     /// Registration is per signal, not atomic.
-    pub fn connect<U, S>(&self, target: &S) -> crate::ConnectionGroup
+    pub fn connect<U, S>(this: &Self, target: &S) -> crate::ConnectionGroup
     where
         U: Eventful + HasEvents<U::EventSetType> + 'static,
         S: Sharded<U>,
         T::EventSetType: crate::ConnectEvents<U>,
     {
-        let group = crate::ConnectEvents::connect_events(&*self.events, target);
-        self.inner
+        let group = crate::ConnectEvents::connect_events(&*this.events, target);
+        this.inner
             .connections
             .borrow_mut()
             .push(group.clone().scoped());
@@ -495,3 +483,39 @@ where
 
 #[cfg(test)]
 mod tests;
+
+impl<T> std::fmt::Debug for ShardRc<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShardRc")
+            .field("id", &self.id.id)
+            .field("shard", &self.shard_handle.shard_id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> std::fmt::Debug for ShardRcHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShardRcHandle")
+            .field("id", &self.id.id)
+            .field("shard", &self.shard_handle.shard_id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> std::fmt::Debug for ShardWeakHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShardWeakHandle")
+            .field("id", &self.id)
+            .field("shard", &self.shard_handle.shard_id())
+            .finish_non_exhaustive()
+    }
+}

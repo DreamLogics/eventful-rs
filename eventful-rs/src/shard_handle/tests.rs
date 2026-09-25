@@ -1,4 +1,5 @@
 //! Handle ownership and store collection regression tests.
+use crate::Sharded;
 
 use super::*;
 struct Value {
@@ -36,7 +37,7 @@ fn weak_handle_does_not_keep_event_set_alive() {
     }));
     let id = store.insert(value.clone());
     let local = ShardRc::new(id, value, handle);
-    let weak = local.as_handle().downgrade();
+    let weak = local.to_handle().downgrade();
     let events = Arc::downgrade(&local.events);
     drop(local);
     drop(store.take_garbage());

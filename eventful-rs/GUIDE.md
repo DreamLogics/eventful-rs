@@ -76,13 +76,16 @@ at runtime instead of a singleton; type-inferred `spawn` is unavailable for it.
 
 Synchronous [`EventLoop::bind`] runs directly on the owner thread and blocks when
 called from another thread. Cross-thread blocking is rejected inside Tokio.
-`ShardRc::from(value)` binds locally and panics outside the selected shard's
-context. `ShardRcHandle::from(value)` requires a `Send` value and can block; prefer
-factory construction in async code.
+`ShardRc::try_bind(value)` binds locally and returns `InvokeError::WrongShard`
+outside the selected shard's context. Use `local.to_handle()` (with [`Sharded`]
+in scope) to clone an owned remote handle. Prefer factory construction when
+working across threads.
 
 ## Calling methods
 
-Apply [`macro@asynchronize`] to an inherent implementation, then annotate methods:
+Apply [`macro@asynchronize`] to an inherent implementation, then annotate methods.
+The generated extension trait is private by default; use `#[asynchronize(pub)]`
+or `#[asynchronize(pub(crate))]` when callers in other modules need it in scope:
 
 | API | Submission | Completion |
 | --- | --- | --- |
@@ -110,7 +113,8 @@ with [`macro@eventful`] and implement the trait on listeners. Arguments must be
 concrete arguments such as `Vec<String>` are supported.
 
 - `source.changed().connect(&listener)` subscribes to one signal.
-- `source.connect(&listener)` subscribes to the whole interface.
+- `handle.connect(&listener)` subscribes to the whole interface; for a local
+  reference, use `ShardRc::connect(&source, &listener)`.
 - `emit_changed(args)` dispatches without waiting; `emit_changed_tracked(args)`
   submits immediately and returns a future observing all selected handlers.
 

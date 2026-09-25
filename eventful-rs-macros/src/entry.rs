@@ -11,6 +11,7 @@ use syn::parse_macro_input;
 /// Declare the marker with runtime = main or tokio_main.
 /// The main function's return type is preserved.
 pub(crate) fn sharded_main(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let runtime = crate::runtime_path();
     let mut item = parse_macro_input!(item as syn::ItemFn);
 
     if item.sig.asyncness.is_none() {
@@ -24,6 +25,8 @@ pub(crate) fn sharded_main(attr: TokenStream, item: TokenStream) -> TokenStream 
             .to_compile_error()
             .into();
     }
+    let attributes = item.attrs.clone();
+    let visibility = item.vis.clone();
     let shard = parse_macro_input!(attr as syn::Path);
     let mut sig_orig = item.sig.clone();
     sig_orig.asyncness = None;
@@ -34,9 +37,10 @@ pub(crate) fn sharded_main(attr: TokenStream, item: TokenStream) -> TokenStream 
     quote! {
         #item
 
-        #sig_orig {
+        #(#attributes)*
+        #visibility #sig_orig {
             let result = #shard::shard().run_main(#new_ident);
-            if let Err(e) = ::eventful_rs::join_all_shards() {
+            if let Err(e) = #runtime::join_all_shards() {
                 panic!("failed to join background shards: {}", e);
             }
             result

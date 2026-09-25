@@ -1,0 +1,10 @@
+[package]
+name = "renamed-dependency-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+notifications = { package = "eventful-rs", path = "../../eventful-rs", default-features = false }
