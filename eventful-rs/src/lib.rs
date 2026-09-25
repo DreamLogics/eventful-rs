@@ -1,6 +1,11 @@
 #![doc = include_str!("../README.md")]
 
-pub use eventful_rs_macros::{action, asynced, asynchronize, eventful, events, sharded_main};
+pub use eventful_rs_macros::{
+    action, asynced, asynchronize, eventful, events, scope, sharded_main,
+};
+
+mod binding;
+pub use binding::*;
 
 mod engine;
 pub use engine::{InvokeError, ShardEventHandle};
@@ -170,12 +175,12 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
         F: AsyncFnOnce() -> () + Send + 'static;
     fn invoke_with_handle<T, H, F>(&self, handle: H, f: F)
     where
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + Sized + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
         H: ShardHandle<T>,
         F: FnOnce(&T) + Send + 'static;
     fn invoke_with_handle_async<T, H, F>(&self, handle: H, f: F)
     where
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + Sized + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
         H: ShardHandle<T>,
         F: AsyncFnOnce(&T) -> () + Send + 'static;
 
@@ -185,7 +190,7 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
         task: F,
     ) -> futures::future::BoxFuture<'static, R>
     where
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + Sized + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
         H: ShardHandle<T>,
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static;
@@ -198,7 +203,7 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
         task: F,
     ) -> futures::future::BoxFuture<'static, Result<R, InvokeError>>
     where
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + Sized + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
         H: ShardHandle<T>,
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static,
@@ -220,12 +225,23 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
         F: Future + Send + 'static;
 }
 
+/// A value's event interface and shard affinity.
 pub trait Eventful {
     type EventSetType: ?Sized + Send + Sync + 'static;
-    type EventLoopHandleType: EventLoopHandle;
-    /// Default destination used by the convenience From conversion.
-    fn default_handle() -> Self::EventLoopHandleType {
-        panic!("this type has no default shard; construct it with bind/bind_async")
+    type Shard: ShardAffinity;
+
+    /// Construct on the designated shard and return a thread-safe handle.
+    /// Only the factory's captures must be Send; Self may contain Rc or RefCell.
+    /// The designated event loop must be running to complete this operation.
+    fn spawn<F>(
+        factory: F,
+    ) -> impl Future<Output = Result<ShardRcHandle<Self>, InvokeError>> + Send + 'static
+    where
+        Self: Sized + HasEvents<Self::EventSetType> + 'static,
+        Self::Shard: ShardBinding,
+        F: FnOnce() -> Self + Send + 'static,
+    {
+        Self::Shard::handle().bind_async(move |bind| bind(factory()).as_handle())
     }
 }
 
@@ -244,10 +260,7 @@ pub trait EventLoop {
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
-        T: Eventful<EventLoopHandleType = Self::HandleType>
-            + HasEvents<T::EventSetType>
-            + Sized
-            + 'static;
+        T: Eventful + HasEvents<T::EventSetType> + Sized + 'static;
     fn spawn<F>(&self, f: F)
     where
         F: Future + Send + 'static,
@@ -386,17 +399,6 @@ where
     pub fn connection_count(&self) -> usize {
         self.internal.connections.lock().unwrap().len()
     }
-}
-
-#[macro_export]
-macro_rules! use_shard {
-    ($name:path) => {
-        type DefaultShardHandleType = $crate::ShardEventHandle;
-        fn default_shard() -> &'static impl $crate::EventLoop<HandleType = $crate::ShardEventHandle>
-        {
-            &$name
-        }
-    };
 }
 
 mod background;

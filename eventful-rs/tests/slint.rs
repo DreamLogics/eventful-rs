@@ -1,7 +1,13 @@
 #![cfg(feature = "slint")]
-use eventful_rs::{EventLoop, EventLoopHandle};
+use eventful_rs::{EventLoop, EventLoopHandle, Eventful};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use std::{rc::Rc, sync::mpsc, time::Duration};
+
+eventful_rs::declare_shard!(pub Ui, runtime = slint);
+#[eventful_rs::eventful(shard = Ui)]
+struct UiState {
+    value: Rc<usize>,
+}
 
 enum Message {
     Invoke(Box<dyn FnOnce() + Send>),
@@ -52,7 +58,11 @@ impl Platform for Headless {
 fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
     let (tx, rx) = mpsc::channel();
     slint::platform::set_platform(Box::new(Headless { tx, rx })).unwrap();
-    let shard = Rc::new(eventful_rs::slint::SlintShard::new());
+    let shard = Ui::shard();
+    let state = UiState::spawn(|| UiState {
+        value: Rc::new(11),
+        events: Default::default(),
+    });
     let handle = shard.handle();
     let owner = std::thread::current().id();
     let (done, result) = futures::channel::oneshot::channel();
@@ -68,6 +78,17 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
     .unwrap();
     slint::spawn_local(async move {
         assert_eq!(result.await.unwrap(), owner);
+        let state = state.await.unwrap();
+        assert_eq!(
+            shard
+                .handle()
+                .try_deferred_invoke(state, async move |s| {
+                    assert_eq!(std::thread::current().id(), owner);
+                    *s.value
+                })
+                .await,
+            Ok(11)
+        );
         shard.shutdown_async().await.unwrap();
         slint::quit_event_loop().unwrap();
     })

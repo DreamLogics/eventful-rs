@@ -35,9 +35,7 @@ impl TokioLocalShard {
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
-        T: Eventful<EventLoopHandleType = crate::ShardEventHandle>
-            + HasEvents<T::EventSetType>
-            + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
     {
         self.handle().bind_async(f)
     }
@@ -56,24 +54,11 @@ impl EventLoop for TokioLocalShard {
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
-        T: Eventful<EventLoopHandleType = Self::HandleType> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
     {
         self.handle().bind(self.inner.owner, f)
     }
     fn join(&self) -> Result<(), ShardError> {
         Ok(())
     }
-}
-#[macro_export]
-macro_rules! shard_tokio_main {
-    ($name:ident) => {
-        pub static $name: ::std::sync::LazyLock<$crate::tokio_local::TokioLocalShard> =
-            ::std::sync::LazyLock::new(|| {
-                $crate::tokio_local::TokioLocalShard::new(stringify!($name))
-            });
-        type DefaultShardHandleType = $crate::tokio_local::TokioLocalShardHandle;
-        fn default_shard() -> &'static $crate::tokio_local::TokioLocalShard {
-            &$name
-        }
-    };
 }

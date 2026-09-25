@@ -1,29 +1,27 @@
 use eventful_rs::*;
 use std::cell::RefCell;
-shard_tokio!(TOKIO_WEB);
+declare_shard!(pub WebShard, runtime = tokio);
 
 #[events]
 pub trait WebClientEvents {
     fn on_response(&self, content: String);
 }
 
-#[eventful(WebClientEvents)]
+#[eventful(WebClientEvents, shard = WebShard)]
 pub struct WebClient {
     client: reqwest::Client,
     last_url: RefCell<Option<String>>,
 }
 #[asynchronize]
 impl WebClient {
-    pub fn new() -> ShardRcHandle<Self> {
-        // The factory executes on TOKIO_WEB, including construction of the client.
-        TOKIO_WEB.bind(|bind| {
-            bind(Self {
-                client: reqwest::Client::new(),
-                last_url: RefCell::new(None),
-                events: Default::default(),
-            })
-            .as_handle()
+    pub async fn new() -> Result<ShardRcHandle<Self>, InvokeError> {
+        // The factory constructs the HTTP client on WebClient::Shard.
+        Self::spawn(|| Self {
+            client: reqwest::Client::new(),
+            last_url: RefCell::new(None),
+            events: Default::default(),
         })
+        .await
     }
     #[asynced]
     pub async fn fetch(&self, url: String) -> Result<(), String> {

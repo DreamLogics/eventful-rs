@@ -1,0 +1,26 @@
+error[E0277]: the trait bound `eventful_rs::DynamicShard: ShardBinding` is not satisfied
+ --> tests/ui/dynamic_spawn.rs:5:13
+  |
+5 |     let _ = Value::spawn(|| Value { events: Default::default() });
+  |             ^^^^^ the trait `ShardBinding` is not implemented for `eventful_rs::DynamicShard`
+  |
+note: required by a bound in `eventful_rs::Eventful::spawn`
+ --> src/lib.rs
+  |
+  |     fn spawn<F>(
+  |        ----- required by a bound in this associated function
+...
+  |         Self::Shard: ShardBinding,
+  |                      ^^^^^^^^^^^^ required by this bound in `Eventful::spawn`
+
+error[E0277]: the trait bound `eventful_rs::DynamicShard: ShardBinding` is not satisfied
+ --> tests/ui/dynamic_spawn.rs:5:13
+  |
+5 |     let _ = Value::spawn(|| Value { events: Default::default() });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `ShardBinding` is not implemented for `eventful_rs::DynamicShard`
+  |
+note: required by a bound in `eventful_rs::Eventful::spawn::{anon_assoc#0}`
+ --> src/lib.rs
+  |
+  |         Self::Shard: ShardBinding,
+  |                      ^^^^^^^^^^^^ required by this bound in `Eventful::spawn::{anon_assoc#0}`

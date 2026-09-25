@@ -63,7 +63,7 @@ impl SlintShard {
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
-        T: Eventful<EventLoopHandleType = SlintShardHandle> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
     {
         self.handle.bind_async(f)
     }
@@ -82,7 +82,7 @@ impl EventLoop for SlintShard {
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
-        T: Eventful<EventLoopHandleType = Self::HandleType> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
     {
         self.handle.bind(self.owner, f)
     }
@@ -94,15 +94,4 @@ impl Drop for SlintShard {
     fn drop(&mut self) {
         self.request_shutdown();
     }
-}
-#[macro_export]
-macro_rules! shard_slint {
-    ($name:ident) => {
-        pub static $name: ::std::sync::LazyLock<$crate::slint::SlintShard> =
-            ::std::sync::LazyLock::new($crate::slint::SlintShard::new);
-        type DefaultShardHandleType = $crate::slint::SlintShardHandle;
-        fn default_shard() -> &'static $crate::slint::SlintShard {
-            &$name
-        }
-    };
 }

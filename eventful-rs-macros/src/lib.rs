@@ -491,10 +491,127 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }.into()
 }
 
+#[derive(Default)]
+struct EventfulArgs {
+    events: Option<syn::Path>,
+    shard: Option<syn::Path>,
+}
+impl syn::parse::Parse for EventfulArgs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut args = Self::default();
+        while !input.is_empty() {
+            let path: syn::Path = input.parse()?;
+            if input.peek(syn::Token![=]) {
+                if !path.is_ident("shard") || args.shard.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        path,
+                        "expected one shard = Marker selection",
+                    ));
+                }
+                input.parse::<syn::Token![=]>()?;
+                args.shard = Some(input.parse()?);
+            } else if args.events.is_none() {
+                args.events = Some(path);
+            } else {
+                return Err(syn::Error::new_spanned(
+                    path,
+                    "expected one event interface",
+                ));
+            }
+            if !input.is_empty() {
+                input.parse::<syn::Token![,]>()?;
+            }
+        }
+        Ok(args)
+    }
+}
+
+/// Select a shard for eventful types in an inline module, including nested inline
+/// modules. Paths are relative to the annotated module (e.g. super::Worker).
+/// Explicit eventful selections and nested scopes override the inherited choice.
+/// Out-of-line modules must select their own shard in their source file.
+#[proc_macro_attribute]
+pub fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as EventfulArgs);
+    let Some(shard) = args.shard.filter(|_| args.events.is_none()) else {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "expected #[scope(shard = Marker)]",
+        )
+        .to_compile_error()
+        .into();
+    };
+    let mut module = parse_macro_input!(item as syn::ItemMod);
+    let Some((_, items)) = &mut module.content else {
+        return syn::Error::new_spanned(
+            module,
+            "scope requires an inline module; select shards inside external module files",
+        )
+        .to_compile_error()
+        .into();
+    };
+    if let Err(error) = apply_scope(items, &shard) {
+        return error.to_compile_error().into();
+    }
+    quote!(#module).into()
+}
+
+fn apply_scope(items: &mut [syn::Item], shard: &syn::Path) -> syn::Result<()> {
+    for item in items {
+        match item {
+            syn::Item::Struct(item) => {
+                for attr in &mut item.attrs {
+                    if attr
+                        .path()
+                        .segments
+                        .last()
+                        .is_some_and(|s| s.ident == "eventful")
+                    {
+                        let mut args = match &attr.meta {
+                            syn::Meta::Path(_) => EventfulArgs::default(),
+                            _ => attr.parse_args::<EventfulArgs>()?,
+                        };
+                        if args.shard.is_none() {
+                            args.shard = Some(shard.clone());
+                            let path = attr.path();
+                            let events = args.events.map(|p| quote!(#p,));
+                            *attr = parse_quote!(#[#path(#events shard = #shard)]);
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(module) => {
+                if module
+                    .attrs
+                    .iter()
+                    .any(|a| a.path().segments.last().is_some_and(|s| s.ident == "scope"))
+                {
+                    continue;
+                }
+                if let Some((_, items)) = &mut module.content {
+                    let mut nested = shard.clone();
+                    if nested.leading_colon.is_none()
+                        && nested.segments.first().is_some_and(|s| s.ident != "crate")
+                    {
+                        if nested.segments.first().is_some_and(|s| s.ident == "self") {
+                            nested.segments = nested.segments.into_iter().skip(1).collect();
+                        }
+                        nested = parse_quote!(super::#nested);
+                    }
+                    apply_scope(items, &nested)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Add an `events` field and trait implementations needed for shard binding.
 ///
 /// Pass an event interface, as in `#[eventful(ProducerEvents)]`, to let instances
-/// of the annotated struct emit those events. The shard declaration in scope supplies its default shard.
+/// of the annotated struct emit those events. Select its shard with `shard = Marker`
+/// or an enclosing `#[scope(shard = Marker)]` attribute.
 /// Initialize the generated field with `events: Default::default()`.
 #[proc_macro_attribute]
 pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -508,13 +625,12 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
     let struct_name = &item.ident;
-    let needs_to_gen_trait = attr.is_empty();
-    let trait_name = if attr.is_empty() {
-        let gen_trait_name = format_ident!("{}Events", struct_name);
-        parse_quote!(#gen_trait_name)
-    } else {
-        parse_macro_input!(attr as syn::Path)
-    };
+    let args = parse_macro_input!(attr as EventfulArgs);
+    let needs_to_gen_trait = args.events.is_none();
+    let trait_name = args.events.unwrap_or_else(|| {
+        let name = format_ident!("{}Events", struct_name);
+        parse_quote!(#name)
+    });
     let (impl_generics, type_generics, where_clause) = item.generics.split_for_impl();
 
     let Some(trait_ident) = trait_name
@@ -554,6 +670,12 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
+    let Some(shard) = args.shard else {
+        return syn::Error::new_spanned(&item.ident,
+            "select a shard with #[eventful(shard = Marker)] or an enclosing #[scope(shard = Marker)]")
+            .to_compile_error().into();
+    };
+
     let gen_trait = if needs_to_gen_trait {
         let trait_ident_set = format_ident!("{}EventsEventSet", struct_name);
         quote! {
@@ -590,10 +712,7 @@ pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
             for #struct_name #type_generics #where_clause
         {
             type EventSetType = #set_name;
-            type EventLoopHandleType = DefaultShardHandleType;
-            fn default_handle() -> Self::EventLoopHandleType {
-                ::eventful_rs::EventLoop::handle(default_shard())
-            }
+            type Shard = #shard;
         }
 
     }
@@ -624,11 +743,11 @@ pub fn asynced(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Run an async main function on a main-thread shard and join background shards.
 ///
-/// Supplies the default main-thread shard for values declared in its scope.
+/// Pass an explicitly declared main-thread shard marker: `#[sharded_main(Main)]`.
 /// The shard continues processing callbacks while the main future awaits work,
 /// allowing background producers to deliver events to main-thread listeners.
-/// Use `#[sharded_main(tokio)]` for Tokio timers and I/O; the default uses
-/// executor-independent futures. The main function's return type is preserved.
+/// Declare the marker with runtime = main or tokio_main.
+/// The main function's return type is preserved.
 #[proc_macro_attribute]
 pub fn sharded_main(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(item as syn::ItemFn);
@@ -644,18 +763,7 @@ pub fn sharded_main(attr: TokenStream, item: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
     }
-    let declaration = if attr.is_empty() {
-        quote!(::eventful_rs::shard_main!(MAIN_SHARD);)
-    } else if attr.to_string() == "tokio" {
-        quote!(::eventful_rs::shard_tokio_main!(MAIN_SHARD);)
-    } else {
-        return syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "expected #[sharded_main] or #[sharded_main(tokio)]",
-        )
-        .to_compile_error()
-        .into();
-    };
+    let shard = parse_macro_input!(attr as syn::Path);
     let mut sig_orig = item.sig.clone();
     sig_orig.asyncness = None;
 
@@ -663,12 +771,10 @@ pub fn sharded_main(attr: TokenStream, item: TokenStream) -> TokenStream {
     item.sig.ident = new_ident.clone();
 
     quote! {
-        #declaration
-
         #item
 
         #sig_orig {
-            let result = MAIN_SHARD.run_main(#new_ident);
+            let result = #shard::shard().run_main(#new_ident);
             if let Err(e) = ::eventful_rs::join_all_shards() {
                 panic!("failed to join background shards: {}", e);
             }

@@ -1,4 +1,7 @@
-use crate::{EventLoopHandle, Eventful, HasEvents, ShardHandle, ShardId, ShardRc, ShardRcStore};
+use crate::{
+    EventLoopHandle, Eventful, HasEvents, ShardAffinity, ShardHandle, ShardId, ShardRc,
+    ShardRcStore,
+};
 use futures::{
     FutureExt, StreamExt,
     channel::{mpsc, oneshot},
@@ -165,7 +168,7 @@ impl ShardEventHandle {
     }
     pub fn try_invoke_with_handle<T, H, F>(&self, handle: H, f: F) -> Result<(), InvokeError>
     where
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
         H: ShardHandle<T>,
         F: FnOnce(&T) + Send + 'static,
     {
@@ -183,7 +186,7 @@ impl ShardEventHandle {
     }
     pub fn try_invoke_with_handle_async<T, H, F>(&self, handle: H, f: F) -> Result<(), InvokeError>
     where
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
         H: ShardHandle<T>,
         F: AsyncFnOnce(&T) -> () + Send + 'static,
     {
@@ -207,7 +210,7 @@ impl ShardEventHandle {
         f: F,
     ) -> impl Future<Output = Result<R, InvokeError>> + Send + 'static + use<T, H, F, R>
     where
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
         H: ShardHandle<T>,
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static,
@@ -245,18 +248,22 @@ impl ShardEventHandle {
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
     {
         let handle = self.clone();
         let (tx, rx) = oneshot::channel();
-        let posted = self.post(Box::new(move |store| {
-            Box::pin(async move {
-                let result =
-                    std::panic::catch_unwind(AssertUnwindSafe(|| bind_here(&store, handle, f)))
-                        .map_err(|_| InvokeError::Panicked);
-                let _ = tx.send(result);
-            })
-        }));
+        let posted = if T::Shard::shard_id().is_some_and(|id| id != self.shard_id) {
+            Err(InvokeError::WrongShard)
+        } else {
+            self.post(Box::new(move |store| {
+                Box::pin(async move {
+                    let result =
+                        std::panic::catch_unwind(AssertUnwindSafe(|| bind_here(&store, handle, f)))
+                            .map_err(|_| InvokeError::Panicked);
+                    let _ = tx.send(result);
+                })
+            }))
+        };
         async move {
             posted?;
             rx.await.map_err(|_| InvokeError::Canceled)?
@@ -266,8 +273,11 @@ impl ShardEventHandle {
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
     {
+        if T::Shard::shard_id().is_some_and(|id| id != self.shard_id) {
+            return Err(InvokeError::WrongShard);
+        }
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = self.clone();
         self.post(Box::new(move |store| {
@@ -284,7 +294,7 @@ impl ShardEventHandle {
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
     {
         if thread::current().id() == owner {
             assert!(
@@ -310,8 +320,12 @@ pub(crate) fn assert_not_async(message: &str) {
 pub(crate) fn bind_here<F, R, T>(store: &RefCell<ShardRcStore>, handle: ShardEventHandle, f: F) -> R
 where
     F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R,
-    T: Eventful<EventLoopHandleType = ShardEventHandle> + HasEvents<T::EventSetType> + 'static,
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
 {
+    assert!(
+        T::Shard::shard_id().is_none_or(|id| id == handle.shard_id),
+        "eventful type belongs to a different shard"
+    );
     f(&|value| {
         let value = Rc::new(value);
         let id = store.borrow_mut().insert(value.clone());
@@ -326,7 +340,7 @@ impl EventLoopHandle for ShardEventHandle {
         task: F,
     ) -> futures::future::BoxFuture<'static, Result<R, InvokeError>>
     where
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
         H: ShardHandle<T>,
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static,
@@ -351,7 +365,7 @@ impl EventLoopHandle for ShardEventHandle {
     }
     fn invoke_with_handle<T, H, F>(&self, h: H, f: F)
     where
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
         H: ShardHandle<T>,
         F: FnOnce(&T) + Send + 'static,
     {
@@ -361,7 +375,7 @@ impl EventLoopHandle for ShardEventHandle {
     }
     fn invoke_with_handle_async<T, H, F>(&self, h: H, f: F)
     where
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
         H: ShardHandle<T>,
         F: AsyncFnOnce(&T) -> () + Send + 'static,
     {
@@ -369,7 +383,7 @@ impl EventLoopHandle for ShardEventHandle {
     }
     fn deferred_invoke<T, H, F, R>(&self, h: H, f: F) -> futures::future::BoxFuture<'static, R>
     where
-        T: Eventful<EventLoopHandleType = Self> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
         H: ShardHandle<T>,
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static,

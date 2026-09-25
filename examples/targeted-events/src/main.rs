@@ -1,3 +1,4 @@
+eventful_rs::declare_shard!(pub Main, runtime = main);
 use eventful_rs::*;
 use rand::prelude::*;
 
@@ -22,7 +23,7 @@ trait MarbleCreatorEvents {
     fn on_create_marble(&self, marble: Marble);
 }
 
-#[eventful(MarbleCreatorEvents)]
+#[eventful(MarbleCreatorEvents, shard = Main)]
 struct MarbleCreator;
 
 impl MarbleCreator {
@@ -61,11 +62,12 @@ impl MarbleCreator {
     }
 }
 
+#[scope(shard = MarbleShard)]
 mod marbles {
     use std::cell::RefCell;
 
     use super::*;
-    shard_std!(MARBLE_SHARD);
+    declare_shard!(pub MarbleShard, runtime = std);
 
     #[eventful]
     pub struct MarbleReceiver {
@@ -75,13 +77,13 @@ mod marbles {
 
     #[asynchronize]
     impl MarbleReceiver {
-        pub fn new(color: Color) -> ShardRcHandle<Self> {
-            Self {
+        pub async fn new(color: Color) -> Result<ShardRcHandle<Self>, InvokeError> {
+            Self::spawn(move || Self {
                 color,
                 received_marbles: RefCell::new(Vec::new()),
                 events: Default::default(),
-            }
-            .into()
+            })
+            .await
         }
 
         #[asynced]
@@ -109,12 +111,12 @@ mod marbles {
     }
 }
 
-#[sharded_main]
+#[sharded_main(Main)]
 async fn main() {
     use marbles::*;
-    let red_receiver = MarbleReceiver::new(Color::Red);
-    let green_receiver = MarbleReceiver::new(Color::Green);
-    let blue_receiver = MarbleReceiver::new(Color::Blue);
+    let red_receiver = MarbleReceiver::new(Color::Red).await.unwrap();
+    let green_receiver = MarbleReceiver::new(Color::Green).await.unwrap();
+    let blue_receiver = MarbleReceiver::new(Color::Blue).await.unwrap();
 
     let creator = MarbleCreator::new();
 

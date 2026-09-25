@@ -47,19 +47,21 @@ The [annotated sharded-main example](examples/sharded-main/src/main.rs) shows a
 producer on a background shard sending events to a reporter on the main-thread
 shard. Run it with `cargo run -p sharded-main`.
 
-`#[sharded_main]` drives the main shard while `main` awaits work, allowing the
+`#[sharded_main(Main)]` drives the main shard while `main` awaits work, allowing the
 reporter to process events while the producer runs on its own thread. It also
 joins the background shards when the main shard finishes.
 
 ```rust
+eventful_rs::declare_shard!(pub Main, runtime = main);
 use eventful_rs::*;
 
+#[scope(shard = ProducerShard)]
 mod producer {
     use std::cell::Cell;
 
     use eventful_rs::*;
 
-    shard_std!(PRODUCER);
+    declare_shard!(pub ProducerShard, runtime = std);
 
     #[events]
     pub trait ProducerEvents {
@@ -73,12 +75,12 @@ mod producer {
 
     #[asynchronize]
     impl Producer {
-        pub fn new() -> ShardRcHandle<Self> {
-            Self {
+        pub async fn new() -> Result<ShardRcHandle<Self>, InvokeError> {
+            Self::spawn(|| Self {
                 events: Default::default(),
                 count: Cell::new(0),
-            }
-            .into()
+            })
+            .await
         }
 
         // This method produces items and emits events for each produced item.
@@ -144,15 +146,15 @@ mod producer {
     }
 }
 
-#[eventful]
+#[eventful(shard = Main)]
 struct ProductionReporter {}
 
 impl ProductionReporter {
-    pub fn new() -> ShardRcHandle<Self> {
-        Self {
+    pub async fn new() -> Result<ShardRcHandle<Self>, InvokeError> {
+        Self::spawn(|| Self {
             events: Default::default(),
-        }
-        .into()
+        })
+        .await
     }
 }
 
@@ -162,13 +164,13 @@ impl producer::ProducerEvents for ProductionReporter {
     }
 }
 
-#[sharded_main]
+#[sharded_main(Main)]
 async fn main() {
     use producer::*;
 
     // create the producer and reporter
-    let producer = Producer::new();
-    let reporter = ProductionReporter::new();
+    let producer = Producer::new().await.unwrap();
+    let reporter = ProductionReporter::new().await.unwrap();
 
     // connect the reporter to the producer's events
     producer.on_produce().connect(&reporter);
@@ -200,7 +202,7 @@ async fn main() {
     // we can also join two handles, but they must be on the same shard
     // this allows us to upgrade both handles at the same time,
     // and run a closure on the shard/thread they live in
-    let another_producer = Producer::new();
+    let another_producer = Producer::new().await.unwrap();
     let joined = producer.join(&another_producer).expect("same shard");
 
     joined.upgrade_in_shard(|(producer1, producer2)| {
@@ -227,11 +229,11 @@ async fn main() {
 
 ### What to use when
 
-- **Choose where values live.** `shard_std!(PRODUCER)` supplies the producer
-  module's default shard. `#[sharded_main]` supplies the main-thread default used
-  by `ProductionReporter`. Their constructors return `ShardRcHandle<Self>` via
-  `.into()`, binding each value to its default shard. `#[eventful]` adds the
-  `events` field and trait implementations for shard binding.
+- **Choose where values live.** `declare_shard!(pub ProducerShard, runtime = std)`
+  declares a named shard. `#[scope(shard = ProducerShard)]` selects it for the
+  producer module. The reporter explicitly selects `Main`, declared with
+  `runtime = main` and driven by `#[sharded_main(Main)]`. Constructors use
+  `Self::spawn(factory).await` to create values on the shard identified by their type.
 - **Connect producers to listeners.** `#[events]` defines `ProducerEvents`;
   `#[eventful(ProducerEvents)]` lets `Producer` emit them. Implementing that trait
   on `ProductionReporter` supplies the callbacks. `connect(&reporter)` arranges
@@ -257,12 +259,54 @@ async fn main() {
   one callback, as a tuple of references, while keeping the original handles
   usable.
 
-The dispatch arguments and results must be `Send + 'static`; shard-local values
-can use `Cell`, `RefCell`, and `Rc` internally. The example's `Cell<usize>` is
-`Send`, so its constructor can use `.into()`. For non-`Send` values such as `Rc`,
-construct inside a `bind` factory and return `.as_handle()`. See
-[Async callers and construction](#async-callers-and-construction) for the blocking
-behavior of `.into()` and the `bind_async` alternative for Tokio callers.
+Dispatch arguments, factory captures, and returned results must be `Send + 'static`.
+The eventful value itself need not be `Send`: construct `Rc`, `Cell`, and `RefCell`
+inside the `spawn` factory on the owning shard.
+
+## Declaring and selecting shards
+
+Declaration creates a unique marker type and a lazy singleton. Several declarations
+can coexist in one module. Selection is explicit and independent of declaration:
+
+```rust
+use eventful_rs::*;
+declare_shard!(pub Worker, runtime = std);
+declare_shard!(pub Ui, runtime = main);
+
+#[scope(shard = super::Worker)]
+mod models {
+    use eventful_rs::*;
+    #[eventful]
+    pub struct Counter;
+
+    #[eventful(shard = super::Ui)]
+    pub struct View;
+}
+```
+
+`<models::Counter as Eventful>::Shard` is `Worker`; `View::Shard` is `Ui`.
+Scope paths resolve inside the annotated module, so use `super::Worker` for a
+marker declared in its parent. Selection extends to nested inline modules;
+per-type selections and nested `#[scope]` attributes override it. External module
+files must select their own shards. Types without a selection fail to compile.
+Scope only processes directly written struct/module items, not declarations
+emitted by another macro or hidden in `cfg_attr`.
+
+`Worker::shard()` exposes the backend for driving and shutdown. Initialize
+calling-thread and Slint markers on their owner thread before submitting work
+from other threads. Named singleton shards cannot restart after shutdown.
+
+`Worker::bind_async(...)` requires `T: Eventful<Shard = Worker>` at compile time.
+Binding through a backend or an erased `ShardEventHandle` checks the designated
+shard ID at runtime: `bind_async` returns `InvokeError::WrongShard`, and synchronous
+`bind` panics, before running the factory. A named type cannot be rebound elsewhere.
+
+For values deliberately placed on different runtime-created shards, select
+`#[eventful(shard = DynamicShard)]` (or put it on a scope) and use each backend's
+`bind` / `bind_async`. Their handles carry the actual shard identity.
+`DynamicShard` has no inferred destination and does not support `T::spawn` or
+`.into()` conversions. Manual `Eventful` implementations likewise specify
+`type Shard = Marker` or `type Shard = DynamicShard`.
 
 ## Joining handles
 
@@ -303,26 +347,26 @@ Interfaces need not be `Send` or `Sync`; listener values remain thread-affine.
 
 ```rust
 use eventful_rs::*;
-shard_std!(MESSAGES);
+declare_shard!(pub MessagesShard, runtime = std);
 
 #[events]
 trait Messages { fn message(&self, text: String); }
 
-#[eventful(Messages)]
+#[eventful(Messages, shard = MessagesShard)]
 struct Sender;
 
-#[eventful]
+#[eventful(shard = MessagesShard)]
 struct Receiver;
 impl Messages for Receiver {
     fn message(&self, text: String) { println!("{text}"); }
 }
 
 fn main() {
-    let source = MESSAGES.bind(|bind| bind(Sender { events: Default::default() }).as_handle());
-    let target = MESSAGES.bind(|bind| bind(Receiver { events: Default::default() }).as_handle());
+    let source = MessagesShard::shard().bind(|bind| bind(Sender { events: Default::default() }).as_handle());
+    let target = MessagesShard::shard().bind(|bind| bind(Receiver { events: Default::default() }).as_handle());
     source.message().connect(&target);
     source.message().emit("hello".to_owned());
-    MESSAGES.join().unwrap();
+    MessagesShard::shard().join().unwrap();
 }
 ```
 
@@ -387,18 +431,20 @@ targets; use the fallible methods when that distinction matters.
 
 | Declaration               | Execution thread          | Driver                       |
 | ------------------------- | ------------------------- | ---------------------------- |
-| `shard_std!(NAME)`        | Dedicated OS thread       | Executor-independent futures |
-| `shard_tokio!(NAME)`      | Dedicated OS thread       | Tokio current-thread runtime |
-| `shard_main!(NAME)`       | Thread calling `run_main` | Executor-independent futures |
-| `shard_tokio_main!(NAME)` | Thread calling `run_main` | Tokio current-thread runtime |
-| `shard_slint!(NAME)`      | Slint UI thread           | Slint's local executor       |
+| `declare_shard!(Name, runtime = std)`        | Dedicated OS thread       | Executor-independent futures |
+| `declare_shard!(Name, runtime = tokio)`      | Dedicated OS thread       | Tokio current-thread runtime |
+| `declare_shard!(Name, runtime = main)`       | Thread calling `run_main` | Executor-independent futures |
+| `declare_shard!(Name, runtime = tokio_main)` | Thread calling `run_main` | Tokio current-thread runtime |
+| `declare_shard!(Name, runtime = slint)`      | Slint UI thread           | Slint's local executor       |
 
 All backends use the same thread-safe handle implementation and common queue.
 Backend handle names remain available as aliases. A runtime shard ID check prevents
 using a value's ID against a different shard's store.
 
-`#[sharded_main] async fn main()` declares and drives a standard main-thread shard,
-then joins background shards. `#[sharded_main(tokio)]` selects the Tokio variant.
+`#[sharded_main(Main)] async fn main()` drives an explicitly declared main-thread
+marker, then joins background shards. Declare `Main` with `runtime = main` or
+`runtime = tokio_main` to choose its executor. It does not implicitly select a
+shard for surrounding types.
 The original main return type is preserved. Calling-thread shards must be driven
 on their constructing thread and may run only once. Their main future and result
 can be non-`Send`.
@@ -423,9 +469,16 @@ On the destination thread, `bind()` executes directly and supports reentrant bin
 Never synchronously wait for work that needs the thread you are blocking.
 
 The convenience `let handle: ShardRcHandle<T> = value.into()` is available when
-`T: Send` and has a default shard. It may block across threads. Use an explicit
-factory with `bind_async` from Tokio, and with `bind` for non-`Send` value creation.
-This avoids constructing runtime-dependent resources on the wrong thread.
+`T: Send` and `T::Shard: ShardBinding`. It may block across threads. Prefer
+`T::spawn(factory).await?` for inferred construction, including from Tokio and for
+non-`Send` values. `spawn` submits immediately; dropping its future does not cancel
+accepted work. Factory panics become `InvokeError::Panicked`, and submissions to
+stopped shards return `InvokeError::Closed`. The destination loop must be running.
+
+`let local: ShardRc<T> = value.into()` remains available inside the designated
+shard's execution context and does not require `T: Send`. It panics outside that
+context. `ShardRc<T>` cannot be returned across threads; return `.as_handle()`
+from a binding factory instead.
 
 ## Ordering, ownership, and shutdown
 
@@ -465,7 +518,7 @@ field is a `Weak` pointer, not an owning `Arc`.
 From the workspace root:
 
 ```sh
-cargo run -p no-main-shard
+cargo run -p no-main-shard-example
 cargo run -p sharded-main
 cargo run -p example_tokio
 cargo test --workspace

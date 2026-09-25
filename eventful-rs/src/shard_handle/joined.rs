@@ -1,5 +1,5 @@
 use super::{ShardHandleInternal, ShardRcHandle};
-use crate::{Eventful, HasEvents, InvokeError, ShardEventHandle};
+use crate::{Eventful, HasEvents, InvokeError};
 use futures::{FutureExt, channel::oneshot};
 use std::panic::AssertUnwindSafe;
 
@@ -18,7 +18,7 @@ pub struct JoinedHandles<H> {
 
 impl<T> ShardRcHandle<T>
 where
-    T: Eventful<EventLoopHandleType = ShardEventHandle> + HasEvents<T::EventSetType> + 'static,
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
 {
     /// Join two strong handles, returning `None` if their shards differ.
     ///
@@ -28,12 +28,12 @@ where
     /// ```
     /// use eventful_rs::*;
     /// use std::cell::Cell;
-    /// shard_std!(COUNTERS);
+    /// declare_shard!(pub Counters, runtime = std);
     ///
-    /// #[eventful]
+    /// #[eventful(shard = Counters)]
     /// struct Counter { value: Cell<usize> }
     ///
-    /// let (foo, bar) = COUNTERS.bind(|bind| {
+    /// let (foo, bar) = Counters::shard().bind(|bind| {
     ///     let make = || bind(Counter {
     ///         value: Cell::new(0), events: Default::default(),
     ///     }).as_handle();
@@ -50,14 +50,14 @@ where
     ///     }),
     /// );
     /// assert_eq!(sum, 3);
-    /// COUNTERS.join().unwrap();
+    /// Counters::shard().join().unwrap();
     /// ```
     pub fn join<U>(
         &self,
         other: &ShardRcHandle<U>,
     ) -> Option<JoinedHandles<(Self, ShardRcHandle<U>)>>
     where
-        U: Eventful<EventLoopHandleType = ShardEventHandle> + HasEvents<U::EventSetType> + 'static,
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
     {
         (self.shard_id() == other.shard_id()).then(|| JoinedHandles {
             handles: (self.clone(), other.clone()),
@@ -69,7 +69,7 @@ macro_rules! joined_upgrades {
     ($($ty:ident : $value:ident),+) => {
         impl<$($ty),+> JoinedHandles<($(ShardRcHandle<$ty>,)+)>
         where
-            $($ty: Eventful<EventLoopHandleType = ShardEventHandle>
+            $($ty: Eventful
                 + HasEvents<$ty::EventSetType> + 'static,)+
         {
             /// Run a callback with all values on their shared shard.
@@ -158,7 +158,7 @@ macro_rules! joined_extend {
     ($($ty:ident : $value:ident),+) => {
         impl<$($ty),+> JoinedHandles<($(ShardRcHandle<$ty>,)+)>
         where
-            $($ty: Eventful<EventLoopHandleType = ShardEventHandle>
+            $($ty: Eventful
                 + HasEvents<$ty::EventSetType> + 'static,)+
         {
             /// Append a strong handle to the flat tuple if it shares this shard.
@@ -166,7 +166,7 @@ macro_rules! joined_extend {
             pub fn join<U>(&self, other: &ShardRcHandle<U>)
                 -> Option<JoinedHandles<($(ShardRcHandle<$ty>,)+ ShardRcHandle<U>)>>
             where
-                U: Eventful<EventLoopHandleType = ShardEventHandle>
+                U: Eventful
                     + HasEvents<U::EventSetType> + 'static,
             {
                 if self.handles.0.shard_id() != other.shard_id() {

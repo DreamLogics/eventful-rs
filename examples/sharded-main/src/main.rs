@@ -1,11 +1,13 @@
+eventful_rs::declare_shard!(pub Main, runtime = main);
 use eventful_rs::*;
 
+#[scope(shard = ProducerShard)]
 mod producer {
     use std::cell::Cell;
 
     use eventful_rs::*;
 
-    shard_std!(PRODUCER);
+    declare_shard!(pub ProducerShard, runtime = std);
 
     #[events]
     pub trait ProducerEvents {
@@ -19,12 +21,12 @@ mod producer {
 
     #[asynchronize]
     impl Producer {
-        pub fn new() -> ShardRcHandle<Self> {
-            Self {
+        pub async fn new() -> Result<ShardRcHandle<Self>, InvokeError> {
+            Self::spawn(|| Self {
                 events: Default::default(),
                 count: Cell::new(0),
-            }
-            .into()
+            })
+            .await
         }
 
         // This method produces items and emits events for each produced item.
@@ -90,15 +92,15 @@ mod producer {
     }
 }
 
-#[eventful]
+#[eventful(shard = Main)]
 struct ProductionReporter {}
 
 impl ProductionReporter {
-    pub fn new() -> ShardRcHandle<Self> {
-        Self {
+    pub async fn new() -> Result<ShardRcHandle<Self>, InvokeError> {
+        Self::spawn(|| Self {
             events: Default::default(),
-        }
-        .into()
+        })
+        .await
     }
 }
 
@@ -108,13 +110,13 @@ impl producer::ProducerEvents for ProductionReporter {
     }
 }
 
-#[sharded_main]
+#[sharded_main(Main)]
 async fn main() {
     use producer::*;
 
     // create the producer and reporter
-    let producer = Producer::new();
-    let reporter = ProductionReporter::new();
+    let producer = Producer::new().await.unwrap();
+    let reporter = ProductionReporter::new().await.unwrap();
 
     // connect the reporter to the producer's events
     producer.on_produce().connect(&reporter);
@@ -146,7 +148,7 @@ async fn main() {
     // we can also join two handles, but they must be on the same shard
     // this allows us to upgrade both handles at the same time,
     // and run a closure on the shard/thread they live in
-    let another_producer = Producer::new();
+    let another_producer = Producer::new().await.unwrap();
     let joined = producer.join(&another_producer).expect("same shard");
 
     joined.upgrade_in_shard(|(producer1, producer2)| {

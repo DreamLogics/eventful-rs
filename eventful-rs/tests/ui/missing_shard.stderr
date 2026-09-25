@@ -1,0 +1,5 @@
+error: select a shard with #[eventful(shard = Marker)] or an enclosing #[scope(shard = Marker)]
+ --> tests/ui/missing_shard.rs:2:8
+  |
+2 | struct Missing;
+  |        ^^^^^^^

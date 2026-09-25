@@ -1,7 +1,7 @@
 use eventful_rs::*;
-shard_std!(WORKER);
-#[eventful]
+declare_shard!(pub Worker, runtime = std);
+#[eventful(shard = Worker)]
 struct Value;
 fn main() {
-    let _local = WORKER.bind(|bind| bind(Value { events: Default::default() }));
+    let _local = Worker::shard().bind(|bind| bind(Value { events: Default::default() }));
 }

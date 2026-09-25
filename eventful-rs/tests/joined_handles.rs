@@ -14,7 +14,7 @@ macro_rules! eventful_type {
     ($ty:ty) => {
         impl Eventful for $ty {
             type EventSetType = ();
-            type EventLoopHandleType = ShardEventHandle;
+            type Shard = eventful_rs::DynamicShard;
         }
         impl HasEvents<()> for $ty {
             fn events(&self) -> &Arc<()> {

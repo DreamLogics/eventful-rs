@@ -1,6 +1,7 @@
 use eventful_rs::*;
 use std::{cell::RefCell, rc::Rc};
-shard_std!(WORKER);
+static WORKER: std::sync::LazyLock<shard::Shard> =
+    std::sync::LazyLock::new(|| shard::Shard::new("worker"));
 
 mod declarations {
     #[eventful_rs::events]
@@ -10,7 +11,7 @@ mod declarations {
 }
 use declarations::{UpdatesEmittersExt, UpdatesSignalsExt};
 
-#[eventful(declarations::Updates)]
+#[eventful(declarations::Updates, shard = DynamicShard)]
 struct Counter {
     value: RefCell<usize>,
     local: Rc<()>,

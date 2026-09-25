@@ -9,16 +9,24 @@ Start with the [annotated producer/reporter example and guide](https://github.co
 The producer lives on a background shard and emits events to a reporter on the
 main-thread shard. It demonstrates when to use each API:
 
-- `shard_std!(PRODUCER)` declares a background shard and the module's default
-  destination. `#[sharded_main]` drives the main-thread shard while the async
-  main function awaits work, then joins background shards when it finishes.
-- `#[eventful]` adds an `events` field and trait implementations for shard binding.
-  Constructors can return `ShardRcHandle<Self>` using `.into()` for `Send` values
-  with a default shard.
-  That conversion may block across threads; use `bind_async` from Tokio and
-  construct non-`Send` values inside `bind` or `bind_async` factories.
+- `declare_shard!(pub Worker, runtime = std)` declares a marker and a lazy singleton.
+  `#[scope(shard = super::Worker)]` selects it for an inline module; paths resolve
+  inside that module. `#[eventful(shard = Worker)]` selects a shard for one type.
+  Explicit type selections and nested scopes override inherited selections.
+- `Eventful::Shard` records the destination in the type. `T::spawn(factory).await?`
+  constructs a value there and returns `ShardRcHandle<T>`. The factory's captures
+  must be `Send`; the value may contain `Rc` or other non-`Send` state.
+- `#[sharded_main(Main)]` drives a marker declared with `runtime = main` or
+  `runtime = tokio_main`, then joins background shards. It supplies no implicit
+  default. Use `Marker::shard()` for backend lifecycle operations.
+- `Marker::bind_async` enforces matching affinity at compile time. Backend/handle
+  binding checks it at runtime. `DynamicShard` explicitly permits runtime selection
+  through `bind` / `bind_async`, without type-inferred `spawn` or `.into()`.
+- `ShardRc<T>::from(value)` binds locally without requiring `Send`; it panics
+  outside the designated shard. `ShardRcHandle<T>::from(value)` requires `Send`
+  and can block across threads. Prefer factory construction from async code.
 - `#[events]` defines a listener interface. Attach it to a source with
-  `#[eventful(ProducerEvents)]`, implement it on a listener, and use
+  `#[eventful(ProducerEvents, shard = Worker)]`, implement it on a listener, and use
   `producer.on_produce().connect(&reporter)` to dispatch on the listener's shard.
 - `#[asynchronize]` generates handle wrappers. `#[asynced]` makes a wrapper async
   even when the original method is synchronous. Awaiting it returns the method's
@@ -42,3 +50,13 @@ keep listener handles alive while the listeners are needed.
 The default feature enables Tokio. Standard thread, calling-thread, and optional
 Slint backends share the same handle implementation. See the guide for backend
 selection, construction, delivery errors, and shutdown behavior.
+
+Shard selections are mandatory. Scope inheritance covers directly written structs
+and nested inline modules; external module files select their own shards. Main/UI
+markers must be initialized on their owner thread before cross-thread submission.
+The destination loop must run to complete `spawn`. Named shards cannot restart.
+
+The old `shard_std!`, `shard_tokio!`, `shard_main!`, `shard_tokio_main!`,
+`shard_slint!`, and `use_shard!` macros are replaced by declaration and selection.
+`Eventful::EventLoopHandleType` and `default_handle()` are replaced by `Shard`;
+backend handles still share `ShardEventHandle`.

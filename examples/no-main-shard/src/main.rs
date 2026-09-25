@@ -1,11 +1,11 @@
 use std::thread;
 
 use eventful_rs::events;
-use eventful_rs::{EventLoop, ShardHandle, eventful, shard_std};
+use eventful_rs::{EventLoop, ShardHandle, declare_shard, eventful};
 
-use crate::bar::BAR_SHARD;
+use crate::bar::BarShard;
 
-shard_std!(FOO_SHARD);
+declare_shard!(pub FooShard, runtime = std);
 
 #[events]
 trait FooEvents {
@@ -13,7 +13,7 @@ trait FooEvents {
     fn on_position(&self, x: f32, y: f32);
 }
 
-#[eventful(FooEvents)]
+#[eventful(FooEvents, shard = FooShard)]
 struct Foo {
     name: String,
 }
@@ -35,9 +35,9 @@ impl Foo {
 mod bar {
 
     use super::*;
-    shard_std!(BAR_SHARD);
+    declare_shard!(pub BarShard, runtime = std);
 
-    #[eventful]
+    #[eventful(shard = BarShard)]
     pub struct Bar;
 
     impl Bar {
@@ -60,8 +60,8 @@ mod bar {
 }
 
 fn main() {
-    let source = FOO_SHARD.bind(|sharded| sharded(Foo::new("Sera".to_owned())).as_handle());
-    let bar = BAR_SHARD.bind(|sharded| sharded(bar::Bar::new()).as_handle());
+    let source = FooShard::shard().bind(|sharded| sharded(Foo::new("Sera".to_owned())).as_handle());
+    let bar = BarShard::shard().bind(|sharded| sharded(bar::Bar::new()).as_handle());
 
     source.on_hello().connect(&bar);
     source.on_position().connect(&bar);
@@ -72,6 +72,6 @@ fn main() {
         }
     });
 
-    FOO_SHARD.join().unwrap();
-    bar::BAR_SHARD.join().unwrap();
+    FooShard::shard().join().unwrap();
+    bar::BarShard::shard().join().unwrap();
 }

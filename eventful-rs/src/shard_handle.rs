@@ -67,7 +67,7 @@ where
 {
     id: ShardRcId,
     inner: Rc<T>,
-    shard_handle: T::EventLoopHandleType,
+    shard_handle: crate::ShardEventHandle,
     pub events: Arc<T::EventSetType>,
 }
 
@@ -75,7 +75,7 @@ impl<T> ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
-    pub(crate) fn new(id: ShardRcId, value: Rc<T>, shard_handle: T::EventLoopHandleType) -> Self {
+    pub(crate) fn new(id: ShardRcId, value: Rc<T>, shard_handle: crate::ShardEventHandle) -> Self {
         let events = value.events().clone();
         Self {
             id,
@@ -124,7 +124,7 @@ where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
     id: ShardRcId,
-    shard_handle: T::EventLoopHandleType,
+    shard_handle: crate::ShardEventHandle,
     pub events: Arc<T::EventSetType>,
 }
 
@@ -207,7 +207,7 @@ where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
     id: usize,
-    shard_handle: T::EventLoopHandleType,
+    shard_handle: crate::ShardEventHandle,
     pub events: std::sync::Weak<T::EventSetType>,
 }
 
@@ -249,7 +249,7 @@ where
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.shard_handle.try_deferred_invoke(self.clone(), task)
+        Box::pin(self.shard_handle.try_deferred_invoke(self.clone(), task))
     }
 }
 
@@ -380,33 +380,28 @@ where
 
 impl<T> From<T> for ShardRc<T>
 where
-    T: Eventful<EventLoopHandleType = crate::ShardEventHandle>
-        + HasEvents<T::EventSetType>
-        + Send
-        + 'static,
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+    T::Shard: crate::ShardBinding,
 {
     fn from(value: T) -> Self {
-        let handle = T::default_handle();
+        let handle = <T::Shard as crate::ShardBinding>::handle();
         if crate::engine::has_context(handle.shard_id) {
             crate::engine::bind_here(&crate::engine::store(handle.shard_id), handle, |bind| {
                 bind(value)
             })
         } else {
-            // invalid
-            panic!("???");
+            panic!("may only create ShardRc within the same shard that T was declared in");
         }
     }
 }
 
 impl<T> From<T> for ShardRcHandle<T>
 where
-    T: Eventful<EventLoopHandleType = crate::ShardEventHandle>
-        + HasEvents<T::EventSetType>
-        + Send
-        + 'static,
+    T: Eventful + HasEvents<T::EventSetType> + Send + 'static,
+    T::Shard: crate::ShardBinding,
 {
     fn from(value: T) -> Self {
-        let handle = T::default_handle();
+        let handle = <T::Shard as crate::ShardBinding>::handle();
         if crate::engine::has_context(handle.shard_id) {
             crate::engine::bind_here(&crate::engine::store(handle.shard_id), handle, |bind| {
                 bind(value).as_handle()
@@ -446,7 +441,7 @@ mod tests {
     }
     impl Eventful for Value {
         type EventSetType = ();
-        type EventLoopHandleType = crate::ShardEventHandle;
+        type Shard = crate::DynamicShard;
     }
     impl HasEvents<()> for Value {
         fn events(&self) -> &Arc<()> {

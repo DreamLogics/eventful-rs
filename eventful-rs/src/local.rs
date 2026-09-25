@@ -35,9 +35,7 @@ impl LocalShard {
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
-        T: Eventful<EventLoopHandleType = crate::ShardEventHandle>
-            + HasEvents<T::EventSetType>
-            + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
     {
         self.handle().bind_async(f)
     }
@@ -56,22 +54,11 @@ impl EventLoop for LocalShard {
     where
         F: FnOnce(&dyn Fn(T) -> ShardRc<T>) -> R + Send + 'static,
         R: Send + 'static,
-        T: Eventful<EventLoopHandleType = Self::HandleType> + HasEvents<T::EventSetType> + 'static,
+        T: Eventful + HasEvents<T::EventSetType> + 'static,
     {
         self.handle().bind(self.inner.owner, f)
     }
     fn join(&self) -> Result<(), ShardError> {
         Ok(())
     }
-}
-#[macro_export]
-macro_rules! shard_main {
-    ($name:ident) => {
-        pub static $name: ::std::sync::LazyLock<$crate::local::LocalShard> =
-            ::std::sync::LazyLock::new(|| $crate::local::LocalShard::new());
-        type DefaultShardHandleType = $crate::local::LocalShardHandle;
-        fn default_shard() -> &'static $crate::local::LocalShard {
-            &$name
-        }
-    };
 }

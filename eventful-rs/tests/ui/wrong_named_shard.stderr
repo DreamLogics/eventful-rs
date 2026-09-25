@@ -1,0 +1,19 @@
+error[E0271]: type mismatch resolving `<Value as Eventful>::Shard == Other`
+ --> tests/ui/wrong_named_shard.rs:7:13
+  |
+7 |     let _ = Other::bind_async(|bind| bind(Value { events: Default::default() }).as_handle());
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ type mismatch resolving `<Value as Eventful>::Shard == Other`
+  |
+note: expected this to be `Other`
+ --> tests/ui/wrong_named_shard.rs:4:20
+  |
+4 | #[eventful(shard = Worker)]
+  |                    ^^^^^^
+note: required by a bound in `bind_async`
+ --> src/binding.rs
+  |
+  |     fn bind_async<F, R, T>(f: F) -> impl Future<Output = Result<R, InvokeError>> + Send + 'static
+  |        ---------- required by a bound in this associated function
+...
+  |         T: Eventful<Shard = Self> + HasEvents<T::EventSetType> + 'static,
+  |                     ^^^^^^^^^^^^ required by this bound in `ShardBinding::bind_async`

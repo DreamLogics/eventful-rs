@@ -2,23 +2,24 @@ use crate::web::*;
 use eventful_rs::*;
 use std::io::{Read, Write};
 mod web;
-shard_main!(MAIN_SHARD);
+declare_shard!(pub Main, runtime = main);
 
-#[eventful]
+#[eventful(shard = Main)]
 struct App {
     web_client: ShardRcHandle<WebClient>,
 }
 #[asynchronize]
 impl App {
-    fn new() -> ShardRcHandle<Self> {
-        let web_client = WebClient::new();
-        let app: ShardRcHandle<Self> = Self {
-            web_client: web_client.clone(),
+    async fn new() -> Result<ShardRcHandle<Self>, InvokeError> {
+        let web_client = WebClient::new().await?;
+        let client = web_client.clone();
+        let app = Self::spawn(move || Self {
+            web_client: client,
             events: Default::default(),
-        }
-        .into();
+        })
+        .await?;
         web_client.on_response().connect(&app);
-        app
+        Ok(app)
     }
     #[asynced]
     async fn run(&self, url: String) -> Result<(), String> {
@@ -54,13 +55,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .unwrap();
     });
-    MAIN_SHARD.run_main(move || async move {
-        let app = App::new();
+    Main::shard().run_main(move || async move {
+        let app = App::new().await.unwrap();
         app.run(url.clone()).await.unwrap();
         assert_eq!(app.last_url().await, Some(url));
         println!("HTTP example complete");
     });
-    TOKIO_WEB.join()?;
+    WebShard::shard().join()?;
     server.join().unwrap();
     Ok(())
 }
