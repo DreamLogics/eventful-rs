@@ -60,13 +60,43 @@ where
     fn as_handle(&self) -> impl ShardHandle<T>;
 }
 
+// Keep lifetime-bound subscriptions in the same Rc allocation as the value.
+// Store entries, local clones, and in-flight callbacks all retain this allocation.
+// Connections drop before T, including during shard shutdown.
+pub(crate) struct ShardValue<T> {
+    connections: std::cell::RefCell<Vec<crate::ScopedConnectionGroup>>,
+    value: T,
+}
+
+impl<T> ShardValue<T> {
+    pub(crate) fn new(value: T) -> Self {
+        Self {
+            connections: Default::default(),
+            value,
+        }
+    }
+}
+
+impl<T> std::ops::Deref for ShardValue<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for ShardValue<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
 #[derive(Debug)]
 pub struct ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
     id: ShardRcId,
-    inner: Rc<T>,
+    inner: Rc<ShardValue<T>>,
     shard_handle: crate::ShardEventHandle,
     pub events: Arc<T::EventSetType>,
 }
@@ -75,7 +105,11 @@ impl<T> ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
-    pub(crate) fn new(id: ShardRcId, value: Rc<T>, shard_handle: crate::ShardEventHandle) -> Self {
+    pub(crate) fn new(
+        id: ShardRcId,
+        value: Rc<ShardValue<T>>,
+        shard_handle: crate::ShardEventHandle,
+    ) -> Self {
         let events = value.events().clone();
         Self {
             id,
@@ -317,7 +351,7 @@ impl ShardRcStore {
 
     pub fn insert<T>(&mut self, value: Rc<T>) -> ShardRcId
     where
-        T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
+        T: 'static,
     {
         self.last_id += 1;
         let id = self.last_id;
@@ -328,7 +362,7 @@ impl ShardRcStore {
 
     pub fn get<T>(&self, id: usize) -> Option<Rc<T>>
     where
-        T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
+        T: 'static,
     {
         self.values
             .get(&id)
@@ -438,15 +472,23 @@ where
     T: Eventful + HasEvents<T::EventSetType> + 'static,
 {
     /// Connect every event in this source's interface to a compatible listener.
-    /// Dropping the returned group keeps subscriptions active; use disconnect()
-    /// or scoped() to remove them. Registration is per signal, not atomic.
+    /// The underlying value owns these subscriptions and disconnects them when
+    /// it is destroyed. Local clones and strong handles keep that value alive
+    /// while its shard runs. Dropping the returned token does not disconnect;
+    /// use disconnect() or scoped() for earlier cleanup.
+    /// Registration is per signal, not atomic.
     pub fn connect<U, S>(&self, target: &S) -> crate::ConnectionGroup
     where
         U: Eventful + HasEvents<U::EventSetType> + 'static,
         S: Sharded<U>,
         T::EventSetType: crate::ConnectEvents<U>,
     {
-        crate::ConnectEvents::connect_events(&*self.events, target)
+        let group = crate::ConnectEvents::connect_events(&*self.events, target);
+        self.inner
+            .connections
+            .borrow_mut()
+            .push(group.clone().scoped());
+        group
     }
 }
 
@@ -517,9 +559,9 @@ mod tests {
     fn weak_handle_does_not_keep_event_set_alive() {
         let (handle, _rx) = crate::ShardEventHandle::channel();
         let mut store = ShardRcStore::new();
-        let value = Rc::new(Value {
+        let value = Rc::new(ShardValue::new(Value {
             events: Arc::new(()),
-        });
+        }));
         let id = store.insert(value.clone());
         let local = ShardRc::new(id, value, handle);
         let weak = local.as_handle().downgrade();

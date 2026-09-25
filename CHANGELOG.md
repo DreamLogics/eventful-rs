@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Tie local `ShardRc::connect` subscriptions to the underlying value's lifetime,
+  allowing constructors to discard connection tokens. Remote-handle and individual
+  signal connections retain their explicitly managed lifetimes.
+
 - Add `connect(&listener)` to shard references and handles for subscribing to all
   events, with `ConnectionGroup` disconnection and scoped cleanup. Weak sources
   return `None` when their event set has expired.

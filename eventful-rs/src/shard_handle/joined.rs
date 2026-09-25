@@ -82,7 +82,7 @@ macro_rules! joined_upgrades {
                 let _ = self.handles.0.shard_handle.post(Box::new(move |store| {
                     Box::pin(async move {
                         let ($($value,)+) = &handles;
-                        $(let $value = { store.borrow().get::<$ty>($value.id()) };)+
+                        $(let $value = { store.borrow().get::<super::ShardValue<$ty>>($value.id()) };)+
                         if let ($(Some($value),)+) = ($($value,)+) {
                             task(($(&$value,)+));
                         }
@@ -101,7 +101,7 @@ macro_rules! joined_upgrades {
                 let _ = self.handles.0.shard_handle.post(Box::new(move |store| {
                     Box::pin(async move {
                         let ($($value,)+) = &handles;
-                        $(let $value = { store.borrow().get::<$ty>($value.id()) };)+
+                        $(let $value = { store.borrow().get::<super::ShardValue<$ty>>($value.id()) };)+
                         if let ($(Some($value),)+) = ($($value,)+) {
                             task(($(&$value,)+)).await;
                         }
@@ -136,7 +136,7 @@ macro_rules! joined_upgrades {
                     Box::pin(async move {
                         let result = AssertUnwindSafe(async move {
                             let ($($value,)+) = &handles;
-                            $(let $value = { store.borrow().get::<$ty>($value.id()) }
+                            $(let $value = { store.borrow().get::<super::ShardValue<$ty>>($value.id()) }
                                 .ok_or(InvokeError::ValueMissing)?;)+
                             let result = task(($(&$value,)+)).await;
                             drop(handles);

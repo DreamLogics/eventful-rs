@@ -398,6 +398,10 @@ Inside a method on the source type, call `self.emit_message(text)`. Event traits
 module expose `MessagesSignalsExt` and `MessagesEmittersExt`; import these extension
 traits where their methods are used.
 
+The [connect-all example](examples/connect-all/src/main.rs) demonstrates bulk
+connections, explicit disconnection, and scoped cleanup. Run it with
+`cargo run -p connect-all`.
+
 Connect an entire event interface with `source.connect(&listener)`. This is an
 inherent method on `ShardRc` and `ShardRcHandle`, so it needs no generated
 extension-trait import. The listener must implement every method of the source's
@@ -412,8 +416,36 @@ let guard = source.connect(&listener).scoped();
 // All these subscriptions disconnect when guard is dropped.
 ```
 
+When the source is a **local `ShardRc<T>`**, `connect` attaches the group to the
+underlying value. Constructor code can discard the returned token:
+
+```rust,ignore
+pub fn new(doc_man: ShardRcHandle<DocumentManager>) -> Result<ShardRc<Self>> {
+    let ui = crate::ui::UIAppWindow::new()?;
+    let w: ShardRc<Self> = AppWindow {
+        ui,
+        events: Default::default(),
+    }.into();
+    w.connect(&doc_man);
+    Ok(w)
+}
+```
+
+This forwards AppWindow's events to DocumentManager. Construct `w` on AppWindow's
+owning shard, as required for local `.into()`. No extra field or Drop implementation
+is needed. The group disconnects when the underlying AppWindow is destroyed, not
+when one local wrapper is dropped. Clones, strong handles, and in-flight callbacks
+can extend that lifetime; normal shard collection may defer destruction.
+Retaining its event set or connection tokens does not extend the subscription
+past value destruction. The token can still disconnect earlier.
+
+Connections created through **remote handles** retain their explicitly managed
+lifetime: use `disconnect()` or `scoped()` for cleanup. Individual signal
+connections also retain their existing lifetime behavior.
+
 The returned `ConnectionGroup` supports `disconnect()`, `scoped()`, and cloning.
-Dropping a plain group keeps subscriptions active. Dropping any scoped clone
+Dropping a plain group keeps subscriptions active until explicit disconnection
+or its local owner is destroyed. Dropping any scoped clone
 disconnects its entire group, matching individual `Connection` behavior.
 Each call adds a new group; disconnecting one leaves other groups and individual
 subscriptions intact. Registration and removal operate per signal, not atomically
@@ -568,6 +600,7 @@ From the workspace root:
 ```sh
 cargo run -p no-main-shard-example
 cargo run -p sharded-main
+cargo run -p connect-all
 cargo run -p example_tokio
 cargo test --workspace
 cargo test -p eventful-rs --no-default-features

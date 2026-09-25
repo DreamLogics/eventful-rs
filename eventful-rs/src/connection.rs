@@ -56,7 +56,8 @@ impl<Args> Drop for ScopedConnection<Args> {
 
 /// Connections for all signals of one event interface.
 /// Dropping the group keeps subscriptions active. Call disconnect() or use
-/// scoped() to disconnect every subscription. Targets remain weak.
+/// scoped() to disconnect every subscription. Groups created by ShardRc::connect
+/// also disconnect when their owning value is destroyed. Targets remain weak.
 #[derive(Clone, Default)]
 pub struct ConnectionGroup {
     disconnectors: Vec<Arc<dyn Fn() + Send + Sync>>,

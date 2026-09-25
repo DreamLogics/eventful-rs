@@ -4,7 +4,9 @@ members = [
     "eventful-rs-macros",
     "examples/no-main-shard",
     "examples/tokio",
-    "examples/sharded-main", "examples/targeted-events",
+    "examples/sharded-main",
+    "examples/targeted-events",
+    "examples/connect-all",
 ]
 resolver = "3"
 

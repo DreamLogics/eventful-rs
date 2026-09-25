@@ -240,6 +240,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
 
 [[package]]
+name = "connect-all"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "eventful-rs",
+]
+
+[[package]]
 name = "const-field-offset"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

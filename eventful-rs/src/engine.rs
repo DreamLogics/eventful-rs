@@ -177,7 +177,11 @@ impl ShardEventHandle {
         }
         self.post(Box::new(move |store| {
             Box::pin(async move {
-                let value = { store.borrow().get::<T>(handle.id()) };
+                let value = {
+                    store
+                        .borrow()
+                        .get::<crate::shard_handle::ShardValue<T>>(handle.id())
+                };
                 if let Some(value) = value {
                     f(&value);
                 }
@@ -195,7 +199,11 @@ impl ShardEventHandle {
         }
         self.post(Box::new(move |store| {
             Box::pin(async move {
-                let value = { store.borrow().get::<T>(handle.id()) };
+                let value = {
+                    store
+                        .borrow()
+                        .get::<crate::shard_handle::ShardValue<T>>(handle.id())
+                };
                 if let Some(value) = value {
                     f(&value).await;
                 }
@@ -222,7 +230,11 @@ impl ShardEventHandle {
             self.post(Box::new(move |store| {
                 Box::pin(async move {
                     let result = AssertUnwindSafe(async move {
-                        let value = { store.borrow().get::<T>(handle.id()) };
+                        let value = {
+                            store
+                                .borrow()
+                                .get::<crate::shard_handle::ShardValue<T>>(handle.id())
+                        };
                         match value {
                             Some(value) => Ok(f(&value).await),
                             None => Err(InvokeError::ValueMissing),
@@ -327,7 +339,7 @@ where
         "eventful type belongs to a different shard"
     );
     f(&|value| {
-        let value = Rc::new(value);
+        let value = Rc::new(crate::shard_handle::ShardValue::new(value));
         let id = store.borrow_mut().insert(value.clone());
         ShardRc::new(id, value, handle.clone())
     })
