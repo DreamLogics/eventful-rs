@@ -191,7 +191,8 @@ applications should limit outstanding work.
 
 Strong handles retain values while the shard runs. Garbage collection periodically
 retires unused values on their owner thread. Shutdown destroys the store even if
-handles remain. The crate forbids unsafe code; local references cannot cross threads.
+handles remain. Local references stay on their owner thread; use handles for
+cross-thread access. Applications using this library may use unsafe Rust.
 
 `request_shutdown()` rejects new work immediately and queues shutdown behind
 accepted jobs. Outstanding futures then get a five-second grace period
