@@ -5,11 +5,9 @@
 # eventful-rs
 
 Is your Rust code too boring? Want to spice up your async cravings? Then let's make
-things a little more eventful! Add some events to your structs, connect that spaghetti
-and let the magic happen. (or make it explode, whatever works for you)
+things a little more eventful! Add some events to your structs and connect them together, whether they are living close or a thread away. Sit back and let the magic happen.
 
-This crate provides an event and async dispatch system for Rust, focused mostly on
-ergonomics rather than performance. (no, that doesn't mean performance is going to be shit)
+This crate provides an event and async dispatch system for Rust, with a focus on ergonomics.
 It is intended for applications that need a simple, safe, and flexible way to handle
 events and asynchronous method calls on values that might not live on the same thread.
 
