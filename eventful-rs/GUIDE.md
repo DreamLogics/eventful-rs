@@ -1,8 +1,9 @@
 # eventful-rs
 
 Typed events and asynchronous method calls for values that live on one thread.
-A **shard** owns an event loop and its values. Values may use `Rc`, `Cell`, and
-`RefCell`; other threads communicate through [`ShardRcHandle<T>`].
+A **shard** owns an event loop and its **shard-local values**: instances of
+[`Eventful`] types bound to that shard. They may use `Rc`, `Cell`, and `RefCell`;
+other threads communicate through [`ShardRcHandle<T>`].
 
 ## Quick start
 
@@ -71,7 +72,7 @@ file defaults, so a glob import can also import the generated alias.
 must be `Send`, not the constructed value. It submits immediately; its returned
 future observes completion. The destination event loop must be running.
 [`ShardBinding::bind_async`] can create multiple values of the same affinity in
-one factory. Use [`DynamicShard`] and a backend's `bind_async` to select an instance
+one factory. Use [`DynamicShard`] and a backend's `bind_async` to select a shard
 at runtime instead of a singleton; type-inferred `spawn` is unavailable for it.
 
 Synchronous [`EventLoop::bind`] runs directly on the owner thread and blocks when

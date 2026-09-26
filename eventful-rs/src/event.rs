@@ -89,7 +89,7 @@ impl<Args, Label> EventInternal<Args, Label> {
 ///
 /// # Example
 ///
-/// For application objects, prefer the [typed interface example](crate#quick-start).
+/// For eventful types, prefer the [typed interface example](crate#quick-start).
 /// Raw events also support inline callbacks and explicit subscription lifetimes:
 ///
 /// ```

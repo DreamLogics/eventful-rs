@@ -1,9 +1,9 @@
-//! Value construction and access to generated event interfaces.
+//! Eventful value construction and access to generated event interfaces.
 use crate::Sharded;
 use crate::{InvokeError, ShardAffinity, ShardBinding, ShardRcHandle};
 use std::sync::Arc;
 
-/// A value's event interface and shard affinity.
+/// Event interface and shard affinity for a type.
 pub trait Eventful {
     /// Generated signal storage shared by the value and its handles.
     type EventSetType: ?Sized + Send + Sync + 'static;

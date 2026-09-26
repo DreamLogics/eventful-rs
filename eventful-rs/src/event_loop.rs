@@ -1,4 +1,4 @@
-//! Backend contracts and value affinity.
+//! Backend contracts and shard affinity.
 use crate::{Eventful, HasEvents, InvokeError, ShardError, ShardHandle, ShardId, ShardRc};
 
 /// Thread-safe submission contract implemented by shard backends.
@@ -21,13 +21,13 @@ pub trait EventLoopHandle: Clone + Send + Sync + 'static {
     fn invoke_async<F>(&self, f: F)
     where
         F: AsyncFnOnce() -> () + Send + 'static;
-    /// Queue a value callback; built-in backends skip missing or rejected targets.
+    /// Queue a callback on a shard-local value; built-in backends skip missing or rejected targets.
     fn invoke_with_handle<T, H, F>(&self, handle: H, f: F)
     where
         T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
         H: ShardHandle<T>,
         F: FnOnce(&T) + Send + 'static;
-    /// Queue an async value callback, allowing interleaving while it awaits.
+    /// Queue an async callback on a shard-local value, allowing interleaving while it awaits.
     fn invoke_with_handle_async<T, H, F>(&self, handle: H, f: F)
     where
         T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
@@ -94,7 +94,7 @@ pub trait EventLoop {
     type HandleType: EventLoopHandle;
     /// Clone the submission handle.
     fn handle(&self) -> Self::HandleType;
-    /// Construct values on this shard and return a Send result.
+    /// Construct eventful values on this shard and return a Send result.
     /// Runs directly on the owner thread; otherwise blocks until the factory finishes.
     ///
     /// # Panics

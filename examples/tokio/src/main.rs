@@ -13,7 +13,7 @@ struct App {
 }
 #[asynchronize]
 impl App {
-    /// Construct this example value and initialize its event storage.
+    /// Create the main-thread listener and its background HTTP client.
     async fn new() -> Result<ShardRcHandle<Self>, InvokeError> {
         let web_client = WebClient::new().await?;
         let client = web_client.clone();

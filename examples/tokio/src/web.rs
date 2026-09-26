@@ -20,7 +20,7 @@ pub struct WebClient {
 }
 #[asynchronize(pub)]
 impl WebClient {
-    /// Construct this example value and initialize its event storage.
+    /// Create the HTTP client on the web shard.
     pub async fn new() -> Result<ShardRcHandle<Self>, InvokeError> {
         // The factory constructs the HTTP client on WebClient::Shard.
         Self::spawn(|| Self {

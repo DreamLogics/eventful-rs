@@ -25,7 +25,7 @@ struct Device {
 }
 
 impl Device {
-    /// Construct this example value and initialize its event storage.
+    /// Create the device state and its event storage.
     fn new(name: String) -> Self {
         Self {
             name,
@@ -51,7 +51,7 @@ mod monitor {
     pub struct Monitor;
 
     impl Monitor {
-        /// Construct this example value and initialize its event storage.
+        /// Create a listener for device updates.
         pub fn new() -> Self {
             Monitor {
                 events: Default::default(),

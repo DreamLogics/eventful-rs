@@ -100,7 +100,7 @@ impl fmt::Display for InvokeError {
 impl std::error::Error for InvokeError {}
 
 /// Thread-safe submission handle shared by the runtime backends.
-/// Only closures and value IDs cross threads; shard values and their futures do not.
+/// Submitted closures cross threads; shard-local values and their callback futures do not.
 #[derive(Clone)]
 pub struct ShardEventHandle {
     /// Stable identity used to validate affinity and look up the owner store.
@@ -200,7 +200,7 @@ impl ShardEventHandle {
             })
         }))
     }
-    /// Queue a value callback, rejecting closed or mismatched shards.
+    /// Queue a callback on a shard-local value, rejecting closed or mismatched shards.
     /// A target that expires before execution is silently skipped.
     ///
     /// # Errors
@@ -228,7 +228,7 @@ impl ShardEventHandle {
             })
         }))
     }
-    /// Queue an async value callback, rejecting closed or mismatched shards.
+    /// Queue an async callback on a shard-local value, rejecting closed or mismatched shards.
     /// A target that expires before execution is silently skipped.
     ///
     /// # Errors
@@ -302,7 +302,7 @@ impl ShardEventHandle {
             rx.await.map_err(|_| InvokeError::Canceled)?
         }
     }
-    /// Create a value on its owner thread; usable from any executor.
+    /// Create an eventful value on its owner thread; usable from any executor.
     ///
     /// # Errors
     /// Returns [`InvokeError`] on shutdown, affinity mismatch, cancellation,

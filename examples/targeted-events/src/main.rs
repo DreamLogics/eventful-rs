@@ -94,7 +94,7 @@ mod notifications {
 
     #[asynchronize(pub)]
     impl Subscriber {
-        /// Construct this example value and initialize its event storage.
+        /// Create a subscriber with an empty notification history.
         pub async fn new(name: &'static str) -> Result<ShardRcHandle<Self>, InvokeError> {
             Self::spawn(move || Self {
                 name,

@@ -1,4 +1,4 @@
-//! Local values and strong or weak cross-thread handles.
+//! Shard-local values and strong or weak cross-thread handles.
 use std::{rc::Rc, sync::Arc};
 
 use crate::{EventLoopHandle, Eventful, HasEvents};
@@ -11,7 +11,7 @@ pub use joined::JoinedHandles;
 mod sealed;
 use sealed::Sealed;
 
-/// Dispatch work to a value's shard through a thread-safe handle.
+/// Dispatch work to a shard-local value through a thread-safe handle.
 /// See the [calling methods guide](crate#calling-methods).
 ///
 /// The callbacks receive local references on the value's owner thread. They can
@@ -56,13 +56,13 @@ where
         T: Eventful + HasEvents<T::EventSetType> + Sized + 'static;
 }
 
-/// Convert a local value or remote handle into a dispatch handle.
+/// Obtain a dispatch handle from a local reference or remote handle.
 /// See the [`crate::DynamicShard`] construction example.
 pub trait Sharded<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
-    /// Concrete owned handle returned by this value.
+    /// Concrete owned dispatch handle.
     type Handle: ShardHandle<T>;
     /// Clone a handle suitable for cross-thread dispatch.
     fn to_handle(&self) -> Self::Handle;
@@ -80,7 +80,7 @@ pub(crate) struct ShardValue<T> {
 }
 
 impl<T> ShardValue<T> {
-    /// Wrap a local allocation or value with its connection and identity metadata.
+    /// Store an eventful value with its owned subscriptions.
     pub(crate) fn new(value: T) -> Self {
         Self {
             connections: Default::default(),
@@ -102,7 +102,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for ShardValue<T> {
     }
 }
 
-/// Strong, owner-thread reference to a value. This reference cannot cross threads.
+/// Strong reference to a shard-local value. This reference cannot cross threads.
 /// See the [`crate::DynamicShard`] construction example.
 /// Dereferences to the value; use [`Sharded::to_handle`] for remote access.
 pub struct ShardRc<T>
@@ -123,7 +123,7 @@ impl<T> ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
-    /// Wrap a local allocation or value with its connection and identity metadata.
+    /// Wrap a stored value with its identity, shard handle, and events.
     pub(crate) fn new(
         id: ShardRcId,
         value: Rc<ShardValue<T>>,
@@ -164,7 +164,7 @@ where
     }
 }
 
-/// Strong thread-safe handle retaining a value while its shard is running.
+/// Strong thread-safe handle retaining a shard-local value while its shard runs.
 /// See the [quick start](crate#quick-start) and [`Self::join`] example.
 /// Shutdown destroys the store even when handles remain alive.
 pub struct ShardRcHandle<T>
@@ -385,7 +385,7 @@ where
     T: Eventful + HasEvents<T::EventSetType> + 'static,
     T::Shard: crate::ShardBinding,
 {
-    /// Bind a value in its named shard's current execution context.
+    /// Bind an eventful value in its named shard's current execution context.
     ///
     /// # Errors
     /// Returns [`crate::InvokeError::WrongShard`] outside that context.
