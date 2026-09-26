@@ -17,7 +17,7 @@
 - Preserve conditional compilation and visibility in generated items and support
   renamed runtime dependencies. Add regression coverage for these macro contracts.
 
-## 0.1.1 - 2026-09-25
+## 0.1.0 - 2026-09-25
 
 - Initial release of `eventful-rs` and `eventful-rs-macros` crates. The library provides
   thread-affine state, typed events, method dispatch, explicit lifetimes, and runtime
