@@ -12,7 +12,7 @@ readme = "README.md"
 documentation = "https://docs.rs/eventful-rs-macros"
 keywords = ["events", "async", "macros"]
 categories = ["asynchronous", "concurrency"]
-include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
+include = ["src/**", "README.md", "LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "Cargo.toml"]
 
 [lib]
 proc-macro = true

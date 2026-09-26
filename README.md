@@ -1,11 +1,14 @@
+[![crates.io](https://img.shields.io/crates/v/eventful-rs.svg)](https://crates.io/crates/eventful-rs)
+[![docs.rs](https://docs.rs/eventful-rs/badge.svg)](https://docs.rs/eventful-rs)
+[![license](https://img.shields.io/crates/l/eventful-rs.svg)](#license)
+
 # eventful-rs
 
 Is your Rust code too boring? Want to spice up your async cravings? Then let's make
 things a little more eventful! Add some events to your structs, connect that spaghetti
 and let the magic happen. (or make it explode, whatever works for you)
 
-This crate provides an event and async dispatch system for Rust, focused mostly on
-ergonomics rather than performance. (no, that doesn't mean performance is going to be shit)
+This crate provides an event and async dispatch system for Rust, with a focus on ergonomics.
 It is intended for applications that need a simple, safe, and flexible way to handle
 events and asynchronous method calls on values that might not live on the same thread.
 
@@ -46,19 +49,25 @@ for the type definitions, delivery semantics, and lifecycle rules.
 
 ## Examples
 
-| Run from this repository | Demonstrates |
-| --- | --- |
-| `cargo run -p sharded-main` | Batch processing, tracked events, actions, joined handles |
-| `cargo run -p no-main-shard-example` | A synchronous application with background shards |
-| `cargo run -p connect-all` | Whole-interface subscriptions and scoped cleanup |
-| `cargo run -p targeted-events` | Topic routing with wildcard observers |
-| `cargo run -p example_tokio` | HTTP I/O on Tokio with a main-thread listener |
+| Run from this repository             | Demonstrates                                              |
+| ------------------------------------ | --------------------------------------------------------- |
+| `cargo run -p sharded-main`          | Batch processing, tracked events, actions, joined handles |
+| `cargo run -p no-main-shard-example` | A synchronous application with background shards          |
+| `cargo run -p connect-all`           | Whole-interface subscriptions and scoped cleanup          |
+| `cargo run -p targeted-events`       | Topic routing with wildcard observers                     |
+| `cargo run -p example_tokio`         | HTTP I/O on Tokio with a main-thread listener             |
 
 See [the example index](https://github.com/DreamLogics/eventful-rs/tree/main/examples)
-for coverage and [the release guide](https://github.com/DreamLogics/eventful-rs/blob/main/RELEASING.md)
+for coverage and [the development guide](https://github.com/DreamLogics/eventful-rs/blob/main/DEVELOPMENT.md)
 for development checks. Queues are unbounded and async operations may interleave;
 this library provides thread affinity, not transactional isolation.
 
 ## License
 
-MIT. See [LICENSE](https://github.com/DreamLogics/eventful-rs/blob/main/LICENSE).
+Copyright (c) 2026 Sanne Ladage and eventful-rs contributors.
+
+Licensed under either [MIT](https://github.com/DreamLogics/eventful-rs/blob/main/LICENSE-MIT)
+or [Apache-2.0](https://github.com/DreamLogics/eventful-rs/blob/main/LICENSE-APACHE), at your option.
+
+Contributions are accepted under these same dual-license terms unless explicitly
+agreed otherwise.

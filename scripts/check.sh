@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 cmp README.md eventful-rs/README.md
+python3 -B -m unittest discover -s scripts/tests
 cargo fmt --all -- --check
 cargo run --manifest-path tests/renamed-dependency/Cargo.toml --locked
 cargo test --workspace --locked

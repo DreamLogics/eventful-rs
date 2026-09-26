@@ -1,4 +1,4 @@
-# Development and release
+# Development
 
 On Debian/Ubuntu, install the native dependencies for the optional Slint backend
 before running the all-feature checks:
@@ -26,28 +26,6 @@ cargo +1.85.0 check -p eventful-rs --lib --no-default-features --locked
 
 The MSRV applies to the core/default library. Slint 1.18 requires Rust 1.92+;
 workspace examples and test dependencies are validated on stable Rust.
-
-## Publish
-
-1. Set the workspace version and matching macro dependency version, finalize the
-   changelog, and confirm repository/license metadata. Keep the root and package
-   README identical; the detailed guide lives in `eventful-rs/GUIDE.md`.
-2. Commit the release and run `./scripts/check.sh`. Packaging requires a clean
-   working tree. During review, `./scripts/check-packages.sh --allow-dirty`
-   verifies the current files without publishing. The script uses a fresh
-   temporary registry to avoid reusing older macro code at the same version,
-   and saves verified archives in `target/package/`.
-3. With crates.io credentials configured, publish in dependency order:
-
-   ```sh
-   cargo publish -p eventful-rs-macros --locked
-   cargo publish -p eventful-rs --locked
-   ```
-
-   Wait until the macro version is available in the registry before publishing
-   the runtime. Inspect each command's result before continuing.
-4. Verify both crates.io pages and the docs.rs all-feature build, then tag the
-   release. Package verification alone does not check name ownership or credentials.
 
 ## Source map
 

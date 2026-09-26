@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Committed stable version to release (for example 0.1.0)'
+        required: true
+        type: string
+      publish:
+        description: 'Publish to crates.io and create the tag and GitHub release'
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crates-io-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate release version, changelog, and tag
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python3 scripts/release.py check "$RELEASE_VERSION"
+
+  checks:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [prepare, checks]
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare curated release notes
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python3 scripts/release.py check "$RELEASE_VERSION" --notes "$RUNNER_TEMP/release-notes.md"
+      - name: Publish macros and runtime
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python3 scripts/release.py publish "$RELEASE_VERSION"
+      - name: Tag the published commit and create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          tag="v$RELEASE_VERSION"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git show-ref --verify --quiet "refs/tags/$tag"; then
+            git tag -a "$tag" "$GITHUB_SHA" -m "Release $tag"
+          fi
+          git push origin "refs/tags/$tag"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --verify-tag --title "$tag" \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi

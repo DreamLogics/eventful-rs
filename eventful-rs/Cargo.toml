@@ -12,7 +12,7 @@ readme = "README.md"
 documentation = "https://docs.rs/eventful-rs"
 keywords = ["events", "async", "actor", "signals", "tokio"]
 categories = ["asynchronous", "concurrency"]
-include = ["src/**", "tests/**", "README.md", "GUIDE.md", "LICENSE", "Cargo.toml"]
+include = ["src/**", "tests/**", "README.md", "GUIDE.md", "LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "Cargo.toml"]
 
 [features]
 default = ["tokio"]

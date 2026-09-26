@@ -15,3 +15,13 @@ uses the runtime crate's `declare_shard!` macro. It does not select a scope defa
 `#[events]` also implements `ConnectEvents<Listener>` for its generated event set,
 enabling `source.connect(&listener)` on shard references and handles. Bulk connections
 use the same weak targets, delivery paths, and listener bounds as individual signals.
+
+## License
+
+Copyright (c) 2026 Sanne Ladage and eventful-rs contributors.
+
+Licensed under either [MIT](https://github.com/DreamLogics/eventful-rs/blob/main/LICENSE-MIT)
+or [Apache-2.0](https://github.com/DreamLogics/eventful-rs/blob/main/LICENSE-APACHE), at your option.
+
+Contributions are accepted under these same dual-license terms unless explicitly
+agreed otherwise.
