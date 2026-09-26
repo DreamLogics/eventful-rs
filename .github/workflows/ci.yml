@@ -31,4 +31,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85.0
       - run: cargo check -p eventful-rs --lib --locked
-      - run: cargo check -p eventful-rs --lib --no-default-features --locked
+      - run: cargo check -p eventful-rs --lib --features tokio --locked

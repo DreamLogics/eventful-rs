@@ -31,8 +31,11 @@ and an optional Slint UI adapter. It is not a distributed actor system (yet?).
 eventful-rs = "0.1"
 ```
 
-Rust 1.85+ for the core and default Tokio backend. Use `default-features = false`
-for the standard executor only; the optional `slint` adapter requires Rust 1.92+.
+The standard thread runtime works without optional features. Enable an adapter
+when your application needs it:
+
+- tokio: enables the Tokio runtime adapter (disabled by default)
+- slint: enables the Slint UI runtime adapter for use in Slint projects.
 
 ## What it offers
 
@@ -48,7 +51,7 @@ for the type definitions, delivery semantics, and lifecycle rules.
 
 ## Examples
 
-| Run from this repository             | Demonstrates                                              |
+| The example                          | Demonstrates                                              |
 | ------------------------------------ | --------------------------------------------------------- |
 | `cargo run -p sharded-main`          | Batch processing, tracked events, actions, joined handles |
 | `cargo run -p no-main-shard-example` | A synchronous application with background shards          |
@@ -56,10 +59,9 @@ for the type definitions, delivery semantics, and lifecycle rules.
 | `cargo run -p targeted-events`       | Topic routing with wildcard observers                     |
 | `cargo run -p example_tokio`         | HTTP I/O on Tokio with a main-thread listener             |
 
-See [the example index](https://github.com/DreamLogics/eventful-rs/tree/main/examples)
-for coverage and [the development guide](https://github.com/DreamLogics/eventful-rs/blob/main/DEVELOPMENT.md)
-for development checks. Queues are unbounded and async operations may interleave;
-this library provides thread affinity, not transactional isolation.
+The examples can be found [here](https://github.com/DreamLogics/eventful-rs/tree/main/examples)
+and some extra info for working with this project can be found in [the development guide](https://github.com/DreamLogics/eventful-rs/blob/main/DEVELOPMENT.md)
+. Do note, the event queues are unbounded and async operations may interleave unless you specifically take this into account.
 
 ## License
 

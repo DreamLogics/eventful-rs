@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.1.1 - 2026-09-26
+## 0.1.2 - tbd
 
-- Updated the documentation for clarity.
+- Rework the getting-started guide around a worker import and main-thread progress.
+- Disable Tokio by default. Applications using the Tokio adapters must now enable
+  `features = ["tokio"]` on their `eventful-rs` dependency.
+
+## 0.1.1 - 2026-09-26
 
 - Dual-license both crates under MIT OR Apache-2.0 and explicitly credit Sanne
   Ladage alongside contributors in copyright notices and author metadata.

@@ -1,218 +1,305 @@
 # eventful-rs
 
-Typed events and asynchronous method calls for values that live on one thread.
-A **shard** owns an event loop and its **shard-local values**: instances of
-[`Eventful`] types bound to that shard. They may use `Rc`, `Cell`, and `RefCell`;
-other threads communicate through [`ShardRcHandle<T>`].
+This guide shows how to use eventful-rs to have struct values talk to each other across different threads (shards),
+either by calling their methods via a dispatcher, or through events. Either experiment on your own, or follow the [tutorial](#tutorial-import-products-and-display-progress) to build a small product importer with progress display.
+
+- [Quick start: set up your project](#quick-start)
+- [Tutorial: import products and display progress](#tutorial-import-products-and-display-progress)
+- [Using this in your project](#using-this-in-your-project)
+- [When you need another runtime](#when-you-need-another-runtime)
+- [Where to go next](#where-to-go-next)
+- [Glossary](#glossary)
 
 ## Quick start
 
-A background inventory sends stock updates to a main-thread display. Tracked
-emission makes receipt part of the operation's result.
+Create a Rust project (or use an existing one):
+
+```sh
+cargo new product-import
+cd product-import
+```
+
+Add eventful-rs under `[dependencies]` in `Cargo.toml`:
+
+```toml
+[dependencies]
+eventful-rs = "0.1"
+```
+
+By default a built-in thread runtime is included with basic async support, though it is advised to use tokio if you intend to work with more fancy async stuff.
+
+## Tutorial: import products and display progress
+
+We'll build a small command-line application that imports a list of products.
+The importer will clean up product names, skip empty entries, and report each
+accepted product to a display. Importing runs on a worker thread; the display
+handles progress on the main thread, as it would in a UI application.
+
+The importer should know how to process products without knowing anything about
+the display. We'll give it a progress event and connect a listener to that event.
+Calling the importer through a handle will run its method on the worker;
+eventful-rs will deliver each progress update on the display's thread.
+
+By the end, we'll be able to start an import, display its progress, and wait for
+both the work and its updates to finish. The work itself is deliberately small
+so we can focus on how the pieces communicate. First we'll walk through those
+pieces, then put them together in a [complete program](#the-complete-program).
+
+### 1. Choose where the work runs
+
+A **shard** is an event loop and the values it owns on one thread. We'll use two:
+one on the main thread for displaying progress, and one on a background thread
+for importing products.
+
+```rust
+use eventful_rs::*;
+
+declare_shard!(pub Main, runtime = main);
+declare_shard!(pub Worker, runtime = std);
+```
+
+These declarations give us names we can use when assigning a struct to a thread.
+The worker starts when first used. Later, `#[sharded_main(Main)]` will drive the
+main thread's event loop while our application waits for the import to finish.
+
+### 2. Give the importer a progress event
+
+An event describes what happened. Define it as a trait with `#[events]`:
+
+```rust
+use eventful_rs::*;
+
+#[events]
+trait ImportEvents {
+    fn imported(&self, name: String);
+}
+```
+
+A listener implements this trait to decide what to do with each product name.
+The importer doesn't need to know which listeners are connected.
+
+In the complete program, `#[eventful(ImportEvents, shard = Worker)]` attaches
+these events to `Importer` and assigns it to the worker. Its `Cell<usize>` counts
+products across calls. That state stays on the worker; no mutex is needed to
+access it there.
+
+### 3. Make the import callable from the main thread
+
+Write the import logic as an ordinary method. `#[asynchronize]` on the `impl`
+and `#[asynced]` on the method also make it callable through the importer's
+handle:
+
+```text
+let count = importer.import(rows).await?;
+```
+
+Here `importer` is a handle, not a reference to the worker's object. The call
+sends `rows` to the worker, runs the method there, and brings its result back.
+While the main thread awaits that result, its event loop can handle progress
+updates.
+
+For each accepted row, our method calls
+`self.emit_imported_tracked(name).await?`. The `#[eventful]` macro generates this
+method from the event trait. It delivers the event to connected listeners and
+waits for their handlers to finish. This lets our final "Done" message mean that
+all progress has been displayed too.
+
+### 4. Connect a display and run the application
+
+`Progress` lives on `Main` and implements `ImportEvents` by printing each product
+name. We create both objects with `spawn`, which runs a constructor on the
+object's chosen thread and returns a handle.
+
+Then we connect them:
+
+```text
+let _subscription = importer.imported().connect(&progress).scoped();
+```
+
+The connection delivers `imported` events to `progress` on the main thread.
+Keeping the scoped subscription in a variable keeps the connection active;
+dropping it disconnects the listener. Keep the `progress` handle alive too:
+a connection does not own its listener.
+
+### The complete program
 
 ```rust
 use eventful_rs::*;
 use std::cell::Cell;
 
 declare_shard!(pub Main, runtime = main);
-declare_shard!(pub InventoryShard, runtime = std);
+declare_shard!(pub Worker, runtime = std);
 
 #[events]
-trait StockEvents {
-    fn stock_changed(&self, remaining: usize);
+trait ImportEvents {
+    fn imported(&self, name: String);
 }
 
-#[eventful(StockEvents, shard = InventoryShard)]
-struct Inventory { remaining: Cell<usize> }
+#[eventful(ImportEvents, shard = Worker)]
+struct Importer {
+    total: Cell<usize>,
+}
 
 #[asynchronize]
-impl Inventory {
+impl Importer {
     #[asynced]
-    async fn reserve(&self, quantity: usize) -> Result<bool, DeliveryError> {
-        let Some(remaining) = self.remaining.get().checked_sub(quantity) else {
-            return Ok(false);
-        };
-        self.remaining.set(remaining);
-        self.emit_stock_changed_tracked(remaining).await?;
-        Ok(true)
+    async fn import(&self, rows: Vec<String>) -> Result<usize, DeliveryError> {
+        let mut count = 0;
+        for row in rows {
+            let name = row.trim();
+            if name.is_empty() {
+                continue;
+            }
+            self.total.set(self.total.get() + 1);
+            self.emit_imported_tracked(name.to_owned()).await?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    #[asynced]
+    fn total(&self) -> usize {
+        self.total.get()
     }
 }
 
 #[eventful(shard = Main)]
-struct Display;
-impl StockEvents for Display {
-    fn stock_changed(&self, remaining: usize) {
-        println!("{remaining} items available");
+struct Progress;
+
+impl ImportEvents for Progress {
+    fn imported(&self, name: String) {
+        println!("Imported: {name}");
     }
 }
 
 #[sharded_main(Main)]
 async fn main() -> Result<(), DeliveryError> {
-    let inventory = Inventory::spawn(|| Inventory {
-        remaining: Cell::new(10), events: Default::default(),
+    let importer = Importer::spawn(|| Importer {
+        total: Cell::new(0),
+        events: Default::default(),
     }).await?;
-    let display = Display::spawn(|| Display { events: Default::default() }).await?;
-    let _subscription = inventory.stock_changed().connect(&display).scoped();
-    assert!(inventory.reserve(3).await?);
+    let progress = Progress::spawn(|| Progress {
+        events: Default::default(),
+    }).await?;
+
+    let _subscription = importer.imported().connect(&progress).scoped();
+    let count = importer.import(vec![" Apples ".into(), "".into(), "Pears".into()]).await?;
+    println!("Done: {count} products imported");
+    assert_eq!(importer.total().await, 2);
     Ok(())
 }
 ```
 
-## Selecting a shard
+Run it with `cargo run`:
 
-[`declare_shard!`] creates a named, lazily initialized singleton. Choose affinity
-per type with `#[eventful(Events, shard = Worker)]`, per inline module with
-`#[scope(shard = Worker)]`, or per source file with `file_scope!(shard = Worker);`.
-An explicit type selection overrides a scope; a scope overrides the file default.
-Scope paths resolve inside the annotated module. Nested inline modules inherit
-scopes; external files must select their own shard. Normal Rust imports apply to
-file defaults, so a glob import can also import the generated alias.
-
-[`Eventful::spawn`] constructs on the selected shard. Only the factory's captures
-must be `Send`, not the constructed value. It submits immediately; its returned
-future observes completion. The destination event loop must be running.
-[`ShardBinding::bind_async`] can create multiple values of the same affinity in
-one factory. Use [`DynamicShard`] and a backend's `bind_async` to select a shard
-at runtime instead of a singleton; type-inferred `spawn` is unavailable for it.
-
-Synchronous [`EventLoop::bind`] runs directly on the owner thread and blocks when
-called from another thread. Cross-thread blocking is rejected inside Tokio.
-`ShardRc::try_bind(value)` binds locally and returns `InvokeError::WrongShard`
-outside the selected shard's context. Use `local.to_handle()` (with [`Sharded`]
-in scope) to clone an owned remote handle. Prefer factory construction when
-working across threads.
-
-## Calling methods
-
-Apply [`macro@asynchronize`] to an inherent implementation, then annotate methods.
-The generated extension trait is private by default; use `#[asynchronize(pub)]`
-or `#[asynchronize(pub(crate))]` when callers in other modules need it in scope:
-
-| API                                                | Submission                               | Completion                                            |
-| -------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------- |
-| `#[asynced]`                                       | When the handle's async method is polled | Returns the method result; panics on dispatch failure |
-| `#[action]`                                        | Immediately, even from synchronous code  | Returns immediately; method must return `()`          |
-| [`ShardHandle::upgrade_in_shard`]                  | Immediately                              | Runs a closure with `&T`; no result                   |
-| [`ShardHandle::deferred_upgrade_in_shard`]         | When polled                              | Awaits a closure's result; panics on failure          |
-| [`ShardWeakHandle::try_deferred_upgrade_in_shard`] | Immediately                              | Returns `Result<R, InvokeError>`                      |
-
-Original methods can be synchronous or async. Arguments, captured state, and
-returned values crossing threads must be `Send + 'static`. The callback's future
-and its `&T` stay on the shard. Ordinary methods remain accessible through local
-references. A strong handle can use `.downgrade()` to access fallible dispatch.
-
-[`ShardRcHandle::join`] groups two to eight strong handles from the same shard,
-returning `None` for mismatched shards. Chained joins form a flat tuple; use a
-single callback to access the values together. This does not serialize an async
-callback across suspension points.
-
-## Events and connections
-
-[`macro@events`] defines a synchronous listener trait. Attach it to a producer
-with [`macro@eventful`] and implement the trait on listeners. Arguments must be
-`Clone + Send + 'static`. Event interfaces and eventful structs cannot be generic;
-concrete arguments such as `Vec<String>` are supported.
-
-- `source.changed().connect(&listener)` subscribes to one signal.
-- `handle.connect(&listener)` subscribes to the whole interface; for a local
-  reference, use `ShardRc::connect(&source, &listener)`.
-- `emit_changed(args)` dispatches without waiting; `emit_changed_tracked(args)`
-  submits immediately and returns a future observing all selected handlers.
-
-Awaiting a method does **not** wait for its untracked emissions. Tracked delivery
-waits for every outcome and returns the first error in connection order. It does
-not track work independently spawned by a handler. Dropping a tracking future
-does not cancel accepted shard deliveries. [`DeliveryError`] distinguishes closed
-shards, missing values, wrong shards, unwinding panics, and cancellation.
-
-Connections hold listeners weakly: keep a strong listener handle alive. Dropping
-[`Connection`] or [`ConnectionGroup`] leaves subscriptions active. Use
-`disconnect()` or `.scoped()` for cleanup; dropping any scoped clone disconnects
-the subscription. An emission uses a snapshot, so already selected deliveries
-may still run after disconnection. Bulk registration/removal is per signal,
-not atomic across the interface.
-
-[`ShardRc::connect`] additionally ties the subscriptions to the source value's
-lifetime. Remote [`ShardRcHandle::connect`] uses explicitly managed subscriptions.
-A weak source's `connect` returns `None` if its event storage has expired.
-
-### Labelled routing
-
-Add `#[with_label(LabelType)]` to an event method. Implement [`EventLabel`] with
-`subscription.matches(&emitted)`; a subscription can represent a topic, mask,
-range, or other application rule. The label is routing metadata, not a handler
-argument, and need not implement `Clone` or `Eq`.
-
-```rust
-use eventful_rs::*;
-struct Topic(&'static str);
-impl EventLabel for Topic {
-    fn matches(&self, emitted: &Self) -> bool { self.0 == emitted.0 }
-}
-#[events]
-trait Updates {
-    #[with_label(Topic)]
-    fn changed(&self, message: String);
-}
+```text
+Imported: Apples
+Imported: Pears
+Done: 2 products imported
 ```
 
-Use `signal.connect_labelled(&listener, Topic("orders"))` and
-`emit_changed(Topic("orders"), message)`. Ordinary and bulk connections are
-wildcards. Matching scans subscriptions on the emitting thread before cloning
-payloads or scheduling deliveries. It must be fast and safe for concurrent calls.
-Tracked emission reports matching panics and continues other deliveries;
-untracked emission propagates them.
+The `events: Default::default()` fields initialize the event storage added by
+`#[eventful]`, including on listeners. `#[sharded_main]` runs the main event loop
+and joins background shards after `main` returns.
 
-## Backends and features
+Notice that `total` is a synchronous method on `Importer`, but calling it through
+the handle is asynchronous: even reading the counter has to happen on its owning
+thread. You can add another import call and the counter will retain its value.
 
-| Runtime in `declare_shard!` | Backend                                                   | Feature           |
-| --------------------------- | --------------------------------------------------------- | ----------------- |
-| `std`                       | [`shard::Shard`], dedicated thread                        | None              |
-| `main`                      | [`local::LocalShard`], calling thread                     | None              |
-| `tokio`                     | `tokio::TokioShard`, dedicated thread with timers and I/O | `tokio` (default) |
-| `tokio_main`                | `tokio_local::TokioLocalShard`, calling thread with Tokio | `tokio`           |
-| `slint`                     | `slint::SlintShard`, application UI loop                  | `slint`           |
+You now have a worker with its own state, a main-thread listener, and a connection
+between them. To add another consumer, implement `ImportEvents` on another
+`#[eventful]` type, create it, and connect it to the same signal. The importer
+needs no changes.
 
-Disable default features for executor-independent futures only. Core and Tokio
-support Rust 1.85; Slint 1.18 requires Rust 1.92 or newer. An application must
-select its own Slint backend and renderer.
+## Using this in your project
 
-Initialize main/UI markers on their owner thread before cross-thread access.
-Calling-thread shards run once via `run_main` or `run_event_loop`.
-[`macro@sharded_main`] drives a declared `main` or `tokio_main` shard and joins
-background shards after the main future returns. It preserves the return type.
-Standard shards do not supply a Tokio reactor.
+Start by deciding which values need to share a thread. Several types can use the
+same shard; you don't need a thread per object. Assign each with
+`#[eventful(shard = Worker)]`, adding it's event trait if it produces events.
+For a module of related types, [`macro@scope`] can set their shard together.
 
-## Ordering, lifetimes, and shutdown
+Use `spawn` to construct values where they belong. Its closure can build `Rc`,
+`Cell`, and `RefCell` state on that thread. Captures sent into the closure must be
+`Send`, but the constructed value doesn't have to be. The returned
+[`ShardRcHandle`] can be cloned and passed to other threads.
 
-Accepted operations start in queue order. Synchronous callbacks finish before
-the next starts; async callbacks may interleave after yielding. Do not hold a
-`RefCell` borrow across an await if other jobs may borrow it. Queues are unbounded:
-applications should limit outstanding work.
+Mark methods you want to call through handles with `#[asynced]`. When splitting
+code into modules, use `#[asynchronize(pub)]` and import the generated extension
+trait at the call site. If a command needs no result, `#[action]` queues it
+immediately, including from synchronous code.
 
-Strong handles retain values while the shard runs. Garbage collection periodically
-retires unused values on their owner thread. Shutdown destroys the store even if
-handles remain. Local references stay on their owner thread; use handles for cross-thread access.
+Use events when other parts of the application need to react to a change.
+`emit_imported(name)` queues progress without waiting for listeners;
+`emit_imported_tracked(name).await?` waits for their handlers. In our example,
+waiting for each update keeps the producer paced by the display. A delivery
+failure returns a [`DeliveryError`]; it does not undo the counter change or any
+handler that already ran.
 
-`request_shutdown()` rejects new work immediately and queues shutdown behind
-accepted jobs. Outstanding futures then get a five-second grace period
-(customizable with background `try_new`). Unfinished futures are dropped on the
-owner thread. Blocking code and non-yielding polls cannot be interrupted.
+A few rules matter as your application grows:
 
-Join background shards using [`EventLoop::join`] from synchronous code, or their
-`join_async` from an external Tokio runtime. Neither can join its own shard.
-[`join_all_shards`] joins registered backgrounds; with Tokio,
-`join_all_shards_async` avoids blocking workers. Finish cross-shard workflows
-before joining: joining is not a protocol for detecting global inactivity.
-Named singleton shards cannot restart and are not dropped at process exit.
+- **Keep handles and subscriptions alive.** A strong handle keeps a value alive
+  while its shard runs. Connections hold listeners weakly. Use `.scoped()` for
+  cleanup on drop; a plain [`Connection`] stays connected until disconnected.
+- **Allow for async interleaving.** A shard starts queued calls in order, but
+  other calls may run when an async method awaits. Don't keep a `RefCell` borrow
+  across an await if another call might access it.
+- **Limit outstanding work.** Queues are unbounded. Awaiting each call or tracked
+  event is one way to avoid submitting work faster than it can be handled.
+- **Finish workflows before shutting down.** Complete the calls and deliveries
+  your application needs before returning from `main`. For manual lifecycle
+  management, see [`EventLoop`] and [`join_all_shards`].
 
-For calling-thread and UI shards, `join()` is a no-op. Drive shutdown before
-stopping the host loop. In Slint, await `shutdown_async()` before quitting Slint.
-Child tasks spawned directly through Tokio or Slint are outside shard accounting.
-Caught unwinding panics do not roll back mutations; aborting panics are not caught.
+## When you need another runtime
 
-## Examples
+The example uses `std` for a background thread and `main` for the calling thread.
+They can run async methods, but don't provide Tokio's timers or I/O reactor.
+If your worker uses Tokio-based networking or timers, enable the adapter:
 
-The repository's [example index](https://github.com/DreamLogics/eventful-rs/tree/main/examples)
-maps runnable scenarios to features, including HTTP I/O, routed notifications,
-subscription lifetimes, joined handles, and synchronous integration.
+```toml
+[dependencies]
+eventful-rs = { version = "0.1", features = ["tokio"] }
+```
+
+Then select `runtime = tokio` for that worker. Use `runtime = tokio_main` if the
+main thread also needs Tokio. Tokio is optional and disabled by default.
+
+For a Slint application, enable `slint` and use `runtime = slint` to deliver
+callbacks through the UI loop. The application selects its Slint backend and
+renderer. Initialize the shard on the UI thread, and await `shutdown_async()`
+before quitting the UI loop. See the [Slint module](https://docs.rs/eventful-rs/latest/eventful_rs/slint/)
+for integration details.
+
+## Where to go next
+
+The [runnable examples](https://github.com/DreamLogics/eventful-rs/tree/main/examples)
+build on these ideas:
+
+- **`sharded-main`** expands the importer into modules and adds actions and access
+  to multiple values in one call.
+- **`no-main-shard-example`** integrates workers into a synchronous application.
+- **`connect-all`** connects an entire event interface and manages subscriptions.
+- **`targeted-events`** routes notifications by topic using [`EventLabel`].
+- **`example_tokio`** performs HTTP I/O on a worker and reports to the main thread.
+
+For more control, see [`ShardRcHandle::join`] for accessing several values on one
+shard, [`DynamicShard`] for selecting a shard at runtime, and [`DeliveryError`]
+for tracked delivery outcomes.
+
+## Glossary
+
+| Concept                   | Meaning                                                                                                                                                                                                                     |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Shard**                 | An event loop and the values it owns on one thread. Several objects can share a shard.                                                                                                                                      |
+| **Event loop**            | Runs queued calls and event handlers on the shard's thread, and polls their async work.                                                                                                                                     |
+| **Shard affinity**        | The choice of shard for a type, such as `shard = Worker`. It determines where its values are created and their methods run.                                                                                                 |
+| **Eventful value**        | An object managed by a shard, usually declared with `#[eventful]`. It can produce events, listen to them, or simply expose methods.                                                                                         |
+| **Handle**                | A way to communicate with an object on its shard without accessing the object directly. A strong [`ShardRcHandle`] can cross threads and keeps the object alive while the shard runs; a weak handle does not keep it alive. |
+| **Event interface**       | A trait declared with `#[events]`. Its methods describe the notifications a producer can emit and a listener can handle.                                                                                                    |
+| **Signal**                | One event on a particular producer, such as `importer.imported()`. Connect listeners to it to receive that notification.                                                                                                    |
+| **Listener**              | An eventful value that implements an event interface. Its handlers run on its own shard.                                                                                                                                    |
+| **Connection**            | A subscription linking a producer's signal to a listener. It holds the listener weakly, so the listener also needs a live strong handle.                                                                                    |
+| **Scoped subscription**   | A connection wrapped with `.scoped()` so dropping it disconnects the listener. Dropping a plain connection does not disconnect it.                                                                                          |
+| **Tracked emission**      | An event emission that returns a future for the selected handlers' outcomes. Awaiting it waits for those handlers, but not for work they independently spawn.                                                               |
+| **Async method dispatch** | Calling a method through a handle with `#[asynced]`. Polling the call queues it on the object's shard; awaiting it obtains the method's result.                                                                             |
+| **Action**                | A method marked `#[action]` that a handle queues immediately without waiting for a result. The method must return `()`.                                                                                                     |
+| **Runtime backend**       | The implementation that drives a shard, such as the standard thread runtime, Tokio, or Slint's UI loop.                                                                                                                     |

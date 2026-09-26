@@ -24,7 +24,7 @@ include = [
 ]
 
 [features]
-default = ["tokio"]
+default = []
 tokio = ["dep:tokio"]
 slint = ["dep:slint"]
 

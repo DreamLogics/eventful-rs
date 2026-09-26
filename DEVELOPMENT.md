@@ -1,32 +1,5 @@
 # Development
 
-On Debian/Ubuntu, install the native dependencies for the optional Slint backend
-before running the all-feature checks:
-
-```sh
-sudo apt-get update
-sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev
-```
-
-Slint's font discovery dependency uses `pkg-config` to locate `fontconfig.pc`.
-The core/default library and MSRV checks do not need these packages.
-
-Run `./scripts/check.sh` on stable Rust. It checks formatting, all example binaries,
-core/default/all-feature tests, renamed dependencies, public and private API documentation, Clippy,
-rustdoc links, and both packaged crates. Generated documentation is at
-`target/doc/eventful_rs/index.html`; use `cargo doc -p eventful-rs --all-features
---no-deps --open` to browse it. Build artifacts remain untracked.
-
-Check the supported compiler independently:
-
-```sh
-cargo +1.85.0 check -p eventful-rs --lib --locked
-cargo +1.85.0 check -p eventful-rs --lib --no-default-features --locked
-```
-
-The MSRV applies to the core/default library. Slint 1.18 requires Rust 1.92+;
-workspace examples and test dependencies are validated on stable Rust.
-
 ## Source map
 
 - `event.rs` and `connection.rs`: signals, routing, delivery, subscription lifetime.
