@@ -71,21 +71,21 @@ fn exercise(shard: &impl EventLoop<HandleType = ShardEventHandle>) {
 
 #[test]
 fn standard_concurrency_results_and_panic_isolation() {
-    let shard = shard::Shard::new("standard-test");
+    let shard = std_rt::Shard::new("standard-test");
     exercise(&shard);
     shard.join().unwrap();
 }
 #[cfg(feature = "tokio")]
 #[test]
 fn tokio_concurrency_results_and_panic_isolation() {
-    let shard = tokio::TokioShard::new("tokio-test");
+    let shard = tokio_rt::TokioShard::new("tokio-test");
     exercise(&shard);
     shard.join().unwrap();
 }
 #[test]
 fn wrong_shard_never_resolves_colliding_value_id() {
-    let a = shard::Shard::new("a");
-    let b = shard::Shard::new("b");
+    let a = std_rt::Shard::new("a");
+    let b = std_rt::Shard::new("b");
     let state = a.bind(|bind| bind(TestState::new()).to_handle());
     let _other = b.bind(|bind| bind(TestState::new()).to_handle());
     assert_eq!(
@@ -97,7 +97,7 @@ fn wrong_shard_never_resolves_colliding_value_id() {
 }
 #[test]
 fn shutdown_cancels_pending_results_rejects_submissions_and_is_repeatable() {
-    let shard = shard::Shard::try_new("cancel", Duration::from_millis(20)).unwrap();
+    let shard = std_rt::Shard::try_new("cancel", Duration::from_millis(20)).unwrap();
     let state = shard.bind(|bind| bind(TestState::new()).to_handle());
     let pending = shard
         .handle()
@@ -109,7 +109,7 @@ fn shutdown_cancels_pending_results_rejects_submissions_and_is_repeatable() {
 }
 #[test]
 fn final_value_drop_occurs_on_owner_even_when_handle_drops_elsewhere() {
-    let shard = shard::Shard::new("drop-owner");
+    let shard = std_rt::Shard::new("drop-owner");
     let (tx, rx) = mpsc::channel();
     let state = shard.bind(move |bind| {
         let mut state = TestState::new();
@@ -133,13 +133,13 @@ fn final_value_drop_occurs_on_owner_even_when_handle_drops_elsewhere() {
 }
 #[test]
 fn local_main_accepts_non_send_future_and_result() {
-    let shard = local::LocalShard::new();
+    let shard = local_rt::LocalShard::new();
     let value = shard.run_main(|| async { Rc::new(17) });
     assert_eq!(*value, 17);
 }
 #[test]
 fn local_main_propagates_panic_without_hanging() {
-    let shard = local::LocalShard::new();
+    let shard = local_rt::LocalShard::new();
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             shard.run_main(|| async { panic!("main panic") });
@@ -150,7 +150,7 @@ fn local_main_propagates_panic_without_hanging() {
 #[cfg(feature = "tokio")]
 #[test]
 fn tokio_main_drives_timers_and_nested_submission() {
-    let shard = tokio_local::TokioLocalShard::new("main");
+    let shard = tokio_local_rt::TokioLocalShard::new("main");
     let handle = shard.handle();
     let owner = std::thread::current().id();
     shard.run_main(move || async move {
@@ -193,7 +193,7 @@ fn async_bind_and_join_from_external_tokio_runtime() {
 
 #[test]
 fn local_loop_can_stop_without_a_main_result() {
-    let shard = local::LocalShard::new();
+    let shard = local_rt::LocalShard::new();
     let handle = shard.handle();
     let stop = handle.clone();
     handle.invoke(move || stop.request_shutdown());
@@ -202,7 +202,7 @@ fn local_loop_can_stop_without_a_main_result() {
 
 #[test]
 fn same_shard_nested_deferred_call_progresses() {
-    let shard = shard::Shard::new("nested");
+    let shard = std_rt::Shard::new("nested");
     let state = shard.bind(|bind| bind(TestState::new()).to_handle());
     let handle = shard.handle();
     let nested = state.clone();
@@ -219,7 +219,7 @@ fn same_shard_nested_deferred_call_progresses() {
 
 #[test]
 fn concurrent_joiners_wait_for_actual_completion() {
-    let shard = Arc::new(shard::Shard::new("joiners"));
+    let shard = Arc::new(std_rt::Shard::new("joiners"));
     let (tx, rx) = mpsc::channel();
     shard.handle().invoke(move || {
         tx.send(()).unwrap();
@@ -239,7 +239,7 @@ fn concurrent_joiners_wait_for_actual_completion() {
 
 #[test]
 fn deferred_future_outlives_the_submitting_handle() {
-    let shard = shard::Shard::new("detached-receiver");
+    let shard = std_rt::Shard::new("detached-receiver");
     let state = shard.bind(|bind| bind(TestState::new()).to_handle());
     let result = shard.handle().deferred_invoke(state, async |_| 23);
     assert_eq!(block_on(result), 23);
@@ -248,7 +248,7 @@ fn deferred_future_outlives_the_submitting_handle() {
 
 #[test]
 fn tracked_events_report_async_handler_completion_panic_and_cancellation() {
-    let shard = shard::Shard::try_new("tracked-async", Duration::from_millis(20)).unwrap();
+    let shard = std_rt::Shard::try_new("tracked-async", Duration::from_millis(20)).unwrap();
     let state = shard.bind(|bind| bind(TestState::new()).to_handle());
     let event = Event::<usize>::default();
     let handle = shard.handle();

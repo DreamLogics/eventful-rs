@@ -35,7 +35,7 @@ impl Updates for Listener {
 
 #[test]
 fn private_payloads_support_tracked_dispatch() {
-    let shard = shard::Shard::new("private-payload");
+    let shard = std_rt::Shard::new("private-payload");
     let listener = shard.bind(|bind| {
         bind(Listener {
             count: std::cell::Cell::new(0),

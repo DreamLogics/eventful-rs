@@ -110,7 +110,7 @@ fn exercise(shard: &impl EventLoop<HandleType = ShardEventHandle>) {
 
 #[test]
 fn standard_joined_callbacks() {
-    let shard = shard::Shard::new("joined-standard");
+    let shard = std_rt::Shard::new("joined-standard");
     exercise(&shard);
     shard.join().unwrap();
 }
@@ -125,8 +125,8 @@ fn tokio_joined_callbacks() {
 
 #[test]
 fn joins_reject_different_shards_even_with_colliding_ids() {
-    let first = shard::Shard::new("joined-first");
-    let second = shard::Shard::new("joined-second");
+    let first = std_rt::Shard::new("joined-first");
+    let second = std_rt::Shard::new("joined-second");
     let a = counter(&first);
     let b = counter(&second);
     assert!(a.join(&b).is_none());
@@ -145,7 +145,7 @@ fn joins_reject_different_shards_even_with_colliding_ids() {
 
 #[test]
 fn eight_handles_form_a_flat_tuple_and_closed_shards_report_failure() {
-    let shard = shard::Shard::new("joined-eight");
+    let shard = std_rt::Shard::new("joined-eight");
     let a = counter(&shard);
     let group = a
         .join(&a)

@@ -64,7 +64,7 @@ fn debug<T: Debug>(value: &T) {
 
 #[test]
 fn conditional_methods_do_not_leak_into_generated_items() {
-    let shard = shard::Shard::new("cfg-methods");
+    let shard = std_rt::Shard::new("cfg-methods");
     let state = shard.bind(|bind| {
         bind(State {
             value: Cell::new(0),
@@ -152,7 +152,7 @@ impl qualified::Value {
 
 #[test]
 fn qualified_types_and_restricted_wrapper_visibility_work() {
-    let shard = shard::Shard::new("qualified-impl");
+    let shard = std_rt::Shard::new("qualified-impl");
     let value = shard.bind(|bind| bind(qualified::Value::new()).to_handle());
     assert_eq!(block_on(value.answer()), 42);
     shard.join().unwrap();
@@ -180,11 +180,11 @@ fn runtime_types_have_thread_safe_debuggable_handles() {
     shareable::<ShardEventHandle>();
     shareable::<InvokeError>();
     shareable::<ShardError>();
-    debuggable::<local::LocalShard>();
+    debuggable::<local_rt::LocalShard>();
     #[cfg(feature = "tokio")]
     {
         debuggable::<tokio::TokioShard>();
-        debuggable::<tokio_local::TokioLocalShard>();
+        debuggable::<tokio_local_rt::TokioLocalShard>();
     }
     #[cfg(feature = "slint")]
     debuggable::<slint::SlintShard>();

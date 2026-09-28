@@ -54,24 +54,24 @@ pub(crate) fn declare_shard(input: TokenStream) -> TokenStream {
     };
     let (ty, init) = match backend.to_string().as_str() {
         "std" => (
-            quote!(#runtime::shard::Shard),
-            quote!(#runtime::shard::Shard::new(stringify!(#name))),
+            quote!(#runtime::std_rt::Shard),
+            quote!(#runtime::std_rt::Shard::new(stringify!(#name))),
         ),
         "tokio" => (
-            quote!(#runtime::tokio::TokioShard),
-            quote!(#runtime::tokio::TokioShard::new(stringify!(#name))),
+            quote!(#runtime::tokio_rt::TokioShard),
+            quote!(#runtime::tokio_rt::TokioShard::new(stringify!(#name))),
         ),
         "main" => (
-            quote!(#runtime::local::LocalShard),
-            quote!(#runtime::local::LocalShard::new()),
+            quote!(#runtime::local_rt::LocalShard),
+            quote!(#runtime::local_rt::LocalShard::new()),
         ),
         "tokio_main" => (
-            quote!(#runtime::tokio_local::TokioLocalShard),
-            quote!(#runtime::tokio_local::TokioLocalShard::new(stringify!(#name))),
+            quote!(#runtime::tokio_local_rt::TokioLocalShard),
+            quote!(#runtime::tokio_local_rt::TokioLocalShard::new(stringify!(#name))),
         ),
         "slint" => (
-            quote!(#runtime::slint::SlintShard),
-            quote!(#runtime::slint::SlintShard::new()),
+            quote!(#runtime::slint_rt::SlintShard),
+            quote!(#runtime::slint_rt::SlintShard::new()),
         ),
         _ => {
             return syn::Error::new_spanned(

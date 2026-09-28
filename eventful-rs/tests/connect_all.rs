@@ -37,8 +37,8 @@ fn emit(source: &ShardRcHandle<Source>) {
 
 #[test]
 fn bulk_connections_deliver_and_disconnect_through_local_strong_and_weak_sources() {
-    let a = shard::Shard::new("source");
-    let b = shard::Shard::new("listener");
+    let a = std_rt::Shard::new("source");
+    let b = std_rt::Shard::new("listener");
     let log = Arc::new(Mutex::new(Vec::new()));
     let output = log.clone();
     let target = b.bind(move |bind| {
@@ -116,8 +116,8 @@ fn bulk_connections_deliver_and_disconnect_through_local_strong_and_weak_sources
 
 #[test]
 fn groups_do_not_keep_targets_alive() {
-    let a = shard::Shard::new("weak-target-source");
-    let b = shard::Shard::new("weak-target");
+    let a = std_rt::Shard::new("weak-target-source");
+    let b = std_rt::Shard::new("weak-target");
     let source = a.bind(|bind| {
         bind(Source {
             events: Default::default(),

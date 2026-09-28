@@ -26,8 +26,8 @@ impl<T: AsRef<str> + Clone, const N: usize> declarations::Updates for GenericLis
 
 #[test]
 fn generic_instances_deliver_events_across_shards() {
-    let source_shard = shard::Shard::new("generic-source");
-    let target_shard = shard::Shard::new("generic-target");
+    let source_shard = std_rt::Shard::new("generic-source");
+    let target_shard = std_rt::Shard::new("generic-target");
     let source = source_shard.bind(|bind| {
         bind(GenericListener::<String> {
             name: "source".into(),

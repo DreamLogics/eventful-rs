@@ -1,7 +1,7 @@
 use eventful_rs::*;
 use std::{cell::RefCell, rc::Rc};
-static WORKER: std::sync::LazyLock<shard::Shard> =
-    std::sync::LazyLock::new(|| shard::Shard::new("worker"));
+static WORKER: std::sync::LazyLock<std_rt::Shard> =
+    std::sync::LazyLock::new(|| std_rt::Shard::new("worker"));
 
 mod declarations {
     #[eventful_rs::events]
@@ -74,8 +74,8 @@ fn generated_dispatch_supports_non_send_values_and_events_between_shards() {
 
 #[test]
 fn generated_tracked_signals_observe_cross_shard_completion_and_closed_targets() {
-    let source_shard = shard::Shard::new("tracked-source");
-    let target_shard = shard::Shard::new("tracked-target");
+    let source_shard = std_rt::Shard::new("tracked-source");
+    let target_shard = std_rt::Shard::new("tracked-target");
     let make_counter = |bind: &dyn Fn(Counter) -> ShardRc<Counter>| {
         bind(Counter {
             value: RefCell::new(0),
@@ -131,8 +131,8 @@ mod concrete_event_arguments {
 
     #[test]
     fn concrete_generic_arguments_are_delivered_between_shards() {
-        let source_shard = shard::Shard::new("concrete-source");
-        let target_shard = shard::Shard::new("concrete-target");
+        let source_shard = std_rt::Shard::new("concrete-source");
+        let target_shard = std_rt::Shard::new("concrete-target");
         let factory = |bind: &dyn Fn(Mailbox) -> ShardRc<Mailbox>| {
             bind(Mailbox {
                 values: RefCell::default(),

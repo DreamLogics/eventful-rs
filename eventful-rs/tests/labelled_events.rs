@@ -154,8 +154,8 @@ impl Updates for Receiver {
 
 #[test]
 fn generated_labels_work_across_shards_with_bulk_connections_and_closed_targets() {
-    let source_shard = shard::Shard::new("labels-source");
-    let target_shard = shard::Shard::new("labels-target");
+    let source_shard = std_rt::Shard::new("labels-source");
+    let target_shard = std_rt::Shard::new("labels-target");
     let make = |bind: &dyn Fn(Receiver) -> ShardRc<Receiver>| {
         bind(Receiver {
             count: Default::default(),

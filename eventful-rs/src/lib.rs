@@ -23,17 +23,17 @@ pub use shard_handle::*;
 mod connection;
 pub use connection::*;
 
-pub mod local;
+pub mod local_rt;
 
-pub mod shard;
+pub mod std_rt;
 
 pub mod task;
 
 #[cfg(feature = "tokio")]
-pub mod tokio;
+pub mod tokio_rt;
 
 #[cfg(feature = "tokio")]
-pub mod tokio_local;
+pub mod tokio_local_rt;
 
 #[cfg(feature = "slint")]
 pub mod slint;

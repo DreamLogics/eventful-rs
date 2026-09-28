@@ -47,7 +47,7 @@ impl WindowEvents for DocumentManager {
 
 #[test]
 fn constructor_connections_follow_the_value_not_the_local_wrapper_or_event_set() {
-    let docs = shard::Shard::new("documents");
+    let docs = std_rt::Shard::new("documents");
     let saved = Arc::new(Mutex::new(Vec::new()));
     let output = saved.clone();
     let manager = docs.bind(move |bind| {
@@ -116,7 +116,7 @@ fn constructor_connections_follow_the_value_not_the_local_wrapper_or_event_set()
 
 #[test]
 fn ownership_survives_store_shutdown_but_not_the_last_local_reference() {
-    let docs = shard::Shard::new("shutdown-documents");
+    let docs = std_rt::Shard::new("shutdown-documents");
     let saved = Arc::new(Mutex::new(Vec::new()));
     let output = saved.clone();
     let manager = docs.bind(move |bind| {
