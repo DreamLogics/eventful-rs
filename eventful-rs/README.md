@@ -4,7 +4,7 @@
 
 # eventful-rs
 
-> **NOTE:** This project is in it's infancy and is currently this in an early exploratory phase. Expect breaking changes.
+> **NOTE:** This project is in it's infancy and is currently in an early exploratory phase. Expect breaking changes.
 
 Is your Rust code too boring? Want to spice up your async cravings? Then let's make
 things a little more eventful! Add some events to your structs and connect them together, whether they are living close or a thread away. Sit back and let the magic happen.
