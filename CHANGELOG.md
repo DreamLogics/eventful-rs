@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3 - tbd
+
+- Renamed shard runtime modules with more fitting names, also makes it less likely there will be name collisions.
+
 ## 0.1.2 - 2026-09-28
 
 - Added lookup of sharded rc handles from a reference.
