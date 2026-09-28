@@ -29,7 +29,7 @@ tokio = ["dep:tokio"]
 slint = ["dep:slint"]
 
 [dependencies]
-eventful-rs-macros = { version = "0.1.1", path = "../eventful-rs-macros" }
+eventful-rs-macros = { version = "0.1.2", path = "../eventful-rs-macros" }
 futures = "0.3"
 futures-timer = "3"
 tokio = { version = "1.53", features = [
