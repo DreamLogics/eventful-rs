@@ -4,7 +4,7 @@ use std::cell::RefCell;
 declare_shard!(pub Main, runtime = main);
 declare_shard!(pub ProducerShard, runtime = std);
 declare_shard!(pub ReporterShard, runtime = std);
-file_scope!(shard = ProducerShard);
+use_shard!(shard = ProducerShard);
 
 /// All updates associated with a batch import.
 #[events]

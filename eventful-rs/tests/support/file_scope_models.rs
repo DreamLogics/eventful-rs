@@ -1,4 +1,4 @@
-eventful_rs::file_scope!(shard = crate::Other);
+eventful_rs::use_shard!(shard = crate::Other);
 
 #[eventful_rs::eventful]
 pub struct Local {

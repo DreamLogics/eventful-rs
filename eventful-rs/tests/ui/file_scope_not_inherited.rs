@@ -1,4 +1,4 @@
-eventful_rs::file_scope!(shard = eventful_rs::DynamicShard);
+eventful_rs::use_shard!(shard = eventful_rs::DynamicShard);
 mod child {
     #[eventful_rs::eventful]
     struct Value;

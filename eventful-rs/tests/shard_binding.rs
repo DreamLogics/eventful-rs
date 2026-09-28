@@ -8,7 +8,7 @@ use std::{
 declare_shard!(pub Worker, runtime = std);
 declare_shard!(pub Other, runtime = std);
 
-#[scope(shard = super::Worker)]
+#[sharded(shard = super::Worker)]
 mod models {
     #[eventful_rs::eventful]
     pub struct Local {
@@ -38,7 +38,7 @@ mod models {
         #[eventful_rs::eventful]
         pub struct Inherited;
     }
-    #[eventful_rs::scope(shard = crate::Other)]
+    #[eventful_rs::sharded(shard = crate::Other)]
     pub mod overridden {
         #[eventful_rs::eventful]
         pub struct Selected;

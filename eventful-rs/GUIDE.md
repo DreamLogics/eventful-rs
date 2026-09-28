@@ -216,7 +216,7 @@ needs no changes.
 Start by deciding which values need to share a thread. Several types can use the
 same shard; you don't need a thread per object. Assign each with
 `#[eventful(shard = Worker)]`, adding it's event trait if it produces events.
-For a module of related types, [`macro@scope`] can set their shard together.
+For a module of related types, [`macro@sharded`] can set their shard together.
 
 Use `spawn` to construct values where they belong. Its closure can build `Rc`,
 `Cell`, and `RefCell` state on that thread. Captures sent into the closure must be

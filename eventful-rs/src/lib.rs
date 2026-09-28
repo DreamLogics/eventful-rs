@@ -5,7 +5,7 @@
 extern crate self as eventful_rs;
 
 pub use eventful_rs_macros::{
-    action, asynced, asynchronize, declare_shard, eventful, events, scope, sharded_main,
+    action, asynced, asynchronize, declare_shard, eventful, events, sharded, sharded_main,
 };
 
 mod binding;

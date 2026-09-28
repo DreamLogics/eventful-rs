@@ -3,7 +3,7 @@ use eventful_rs::*;
 use std::cell::Cell;
 
 declare_shard!(pub ImportShard, runtime = std);
-file_scope!(shard = ImportShard);
+use_shard!(shard = ImportShard);
 
 /// Progress updates for a product import.
 #[events]

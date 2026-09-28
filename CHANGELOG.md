@@ -2,7 +2,9 @@
 
 ## 0.1.2 - tbd
 
-- Rework the getting-started guide around a worker import and main-thread progress.
+- Added lookup of sharded rc handles from a reference.
+- Removed unnecessary restriction of preventing generic structs to be eventful.
+- Rework the getting-started guide to make it a little more useful, full rewrite still in progress.
 - Disable Tokio by default. Applications using the Tokio adapters must now enable
   `features = ["tokio"]` on their `eventful-rs` dependency.
 

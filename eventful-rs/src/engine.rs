@@ -4,7 +4,7 @@ pub(crate) use driver::drive;
 
 use crate::{
     EventLoopHandle, Eventful, HasEvents, ShardAffinity, ShardHandle, ShardId, ShardRc,
-    ShardRcStore,
+    ShardRcHandle, ShardRcStore, Sharded,
 };
 use futures::{
     FutureExt,
@@ -373,6 +373,17 @@ impl ShardEventHandle {
         }
         assert_not_async("cross-thread bind blocks; use bind_async instead");
         self.bind_blocking_factory(f).expect("shard binding failed")
+    }
+
+    /// Check if this value lives in the shard store, if so, return a handle to it.
+    /// Returns None outside the owner thread's context or for an unregistered value.
+    pub(crate) fn try_get_handle<T>(&self, value: &T) -> Option<ShardRcHandle<T>>
+    where
+        T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
+    {
+        let store = STORES.with(|stores| stores.borrow().get(&self.shard_id).cloned())?;
+        let (id, stored) = store.borrow().find_value(value)?;
+        Some(ShardRc::new(id, stored, self.clone()).to_handle())
     }
 }
 

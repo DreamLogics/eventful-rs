@@ -1,7 +1,7 @@
 use eventful_rs::*;
 use std::cell::RefCell;
 declare_shard!(pub WebShard, runtime = tokio);
-file_scope!(shard = WebShard);
+use_shard!(shard = WebShard);
 
 /// Responses available to application listeners.
 #[events]

@@ -45,12 +45,12 @@ impl syn::parse::Parse for EventfulArgs {
 /// modules. Paths are relative to the annotated module (e.g. super::Worker).
 /// Explicit eventful selections and nested scopes override the inherited choice.
 /// Out-of-line modules must select their own shard in their source file.
-pub(crate) fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub(crate) fn sharded(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as EventfulArgs);
     let Some(shard) = args.shard.filter(|_| args.events.is_none()) else {
         return syn::Error::new(
             proc_macro2::Span::call_site(),
-            "expected #[scope(shard = Marker)]",
+            "expected #[sharded(shard = Marker)]",
         )
         .to_compile_error()
         .into();
@@ -59,7 +59,7 @@ pub(crate) fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
     let Some((_, items)) = &mut module.content else {
         return syn::Error::new_spanned(
             module,
-            "scope requires an inline module; select shards inside external module files",
+            "sharded requires an inline module; select shards inside external module files",
         )
         .to_compile_error()
         .into();
@@ -96,11 +96,12 @@ fn apply_scope(items: &mut [syn::Item], shard: &syn::Path) -> syn::Result<()> {
                 }
             }
             syn::Item::Mod(module) => {
-                if module
-                    .attrs
-                    .iter()
-                    .any(|a| a.path().segments.last().is_some_and(|s| s.ident == "scope"))
-                {
+                if module.attrs.iter().any(|a| {
+                    a.path()
+                        .segments
+                        .last()
+                        .is_some_and(|s| s.ident == "sharded")
+                }) {
                     continue;
                 }
                 if let Some((_, items)) = &mut module.content {
@@ -126,20 +127,13 @@ fn apply_scope(items: &mut [syn::Item], shard: &syn::Path) -> syn::Result<()> {
 ///
 /// Pass an event interface, as in `#[eventful(ProducerEvents)]`, to let instances
 /// of the annotated struct emit those events. Select its shard with `shard = Marker`
-/// or an enclosing `#[scope(shard = Marker)]` attribute. Otherwise, the current
-/// module must declare `file_scope!(shard = Marker);`.
+/// or an enclosing `#[sharded(shard = Marker)]` attribute. Otherwise, the current
+/// module must declare `use_shard!(shard = Marker);`.
 /// Initialize the generated field with `events: Default::default()`.
+/// Generic parameters and bounds are preserved on the generated implementations.
 pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
     let runtime = crate::runtime_path();
     let mut item = parse_macro_input!(item as ItemStruct);
-    if !item.generics.params.is_empty() {
-        return syn::Error::new_spanned(
-            &item.generics,
-            "generic eventful structs are not supported",
-        )
-        .to_compile_error()
-        .into();
-    }
     let struct_name = &item.ident;
     let visibility = &item.vis;
     let item_cfg = match crate::attributes::conditions(&item.attrs) {

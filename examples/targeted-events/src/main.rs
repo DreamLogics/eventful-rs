@@ -76,7 +76,7 @@ impl NotificationBus {
 }
 
 /// Subscribers with state confined to a background shard.
-#[scope(shard = NotificationShard)]
+#[sharded(shard = NotificationShard)]
 mod notifications {
     use std::cell::RefCell;
 

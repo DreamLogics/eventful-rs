@@ -5,7 +5,7 @@ declare_shard!(pub Other, runtime = std);
 
 #[eventful]
 struct BeforeSelection;
-file_scope!(shard = Worker,);
+use_shard!(shard = Worker,);
 #[eventful]
 struct AfterSelection;
 #[eventful(shard = Other)]
@@ -14,16 +14,16 @@ struct Override;
 #[path = "support/file_scope_models.rs"]
 mod models;
 
-#[scope(shard = crate::Other)]
+#[sharded(shard = crate::Other)]
 mod scoped {
-    eventful_rs::file_scope!(shard = crate::Worker);
+    eventful_rs::use_shard!(shard = crate::Worker);
     #[eventful_rs::eventful]
     pub struct Selected;
 }
 
 mod imported {
     use super::*;
-    file_scope!(shard = Other);
+    use_shard!(shard = Other);
     #[eventful]
     pub struct Selected;
 }

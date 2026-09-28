@@ -47,6 +47,23 @@ impl ShardRcStore {
             .and_then(|(value, _)| value.clone().downcast::<T>().ok())
     }
 
+    /// Find a stored value by identity and retain its existing lifetime token.
+    pub(crate) fn find_value<T: 'static>(
+        &self,
+        value: &T,
+    ) -> Option<(ShardRcId, Rc<super::ShardValue<T>>)> {
+        self.values.values().find_map(|(stored, id)| {
+            let candidate = stored.downcast_ref::<super::ShardValue<T>>()?;
+            if !std::ptr::eq::<T>(&**candidate, value) {
+                return None;
+            }
+            Some((
+                id.clone(),
+                stored.clone().downcast::<super::ShardValue<T>>().ok()?,
+            ))
+        })
+    }
+
     /// Remove unreferenced entries and return allocations for dropping outside the borrow.
     pub(crate) fn take_garbage(&mut self) -> Vec<Rc<dyn Any>> {
         let ids_to_remove: Vec<usize> = self

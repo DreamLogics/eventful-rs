@@ -55,17 +55,22 @@ pub fn asynchronize(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Explicit eventful selections and nested scopes override the inherited choice.
 /// Out-of-line modules must select their own shard in their source file.
 #[proc_macro_attribute]
-pub fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
-    affinity::scope(attr, item)
+pub fn sharded(attr: TokenStream, item: TokenStream) -> TokenStream {
+    affinity::sharded(attr, item)
 }
 
 /// Add an `events` field and trait implementations needed for shard binding.
 ///
 /// Pass an event interface, as in `#[eventful(ProducerEvents)]`, to let instances
 /// of the annotated struct emit those events. Select its shard with `shard = Marker`
-/// or an enclosing `#[scope(shard = Marker)]` attribute. Otherwise, the current
-/// module must declare `file_scope!(shard = Marker);`.
+/// or an enclosing `#[sharded(shard = Marker)]` attribute. Otherwise, the current
+/// module must declare `use_shard!(shard = Marker);`.
 /// Initialize the generated field with `events: Default::default()`.
+///
+/// Structs may declare type, lifetime, and const parameters, including defaults
+/// and `where` clauses. Event interfaces remain non-generic. Binding or spawning
+/// a value on a shard still requires the instantiated type to be `'static`.
+/// `#[asynchronize]` separately requires a non-generic inherent impl.
 #[proc_macro_attribute]
 pub fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
     affinity::eventful(attr, item)

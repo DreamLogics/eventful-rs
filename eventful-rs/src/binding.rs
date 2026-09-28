@@ -63,7 +63,7 @@ impl<S: ShardBinding> ShardAffinity for S {
 /// ```
 /// use eventful_rs::*;
 /// declare_shard!(pub Worker, runtime = std);
-/// file_scope!(shard = Worker);
+/// use_shard!(shard = Worker);
 ///
 /// #[eventful]
 /// struct Counter;
@@ -75,13 +75,13 @@ impl<S: ShardBinding> ShardAffinity for S {
 /// ```
 ///
 /// Declare once per module, anywhere at module level. Explicit `eventful` shard
-/// arguments and enclosing `#[scope]` selections take precedence. Child modules
+/// arguments and enclosing `#[sharded]` selections take precedence. Child modules
 /// do not automatically inherit this selection. Normal Rust imports apply:
-/// `use super::*` can import the alias; a local file_scope! overrides that import.
-/// Use `#[scope]` for explicit recursive inline-module selection.
+/// `use super::*` can import the alias; a local use_shard! overrides that import.
+/// Use `#[sharded]` for explicit recursive inline-module selection.
 /// This declares the reserved module-local alias `__EventfulFileShard`.
 #[macro_export]
-macro_rules! file_scope {
+macro_rules! use_shard {
     (shard = $shard:path $(,)?) => {
         #[doc(hidden)]
         type __EventfulFileShard = $shard;

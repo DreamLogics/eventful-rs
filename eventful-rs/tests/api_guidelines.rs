@@ -103,7 +103,7 @@ fn event_and_connections_do_not_require_debug_payloads() {
 #[test]
 fn local_binding_is_fallible_and_preserves_application_methods() {
     declare_shard!(Main, runtime = main);
-    file_scope!(shard = Main);
+    use_shard!(shard = Main);
     #[eventful]
     struct Local;
     impl Local {
