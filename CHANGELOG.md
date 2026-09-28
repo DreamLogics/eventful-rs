@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.1.2 - tbd
+## 0.1.2 - 2026-09-28
 
 - Added lookup of sharded rc handles from a reference.
+- Renamed `file_scope!` and `#[scope]` macros to `use_shard!` and `#[sharded]`.
 - Removed unnecessary restriction of preventing generic structs to be eventful.
 - Rework the getting-started guide to make it a little more useful, full rewrite still in progress.
 - Disable Tokio by default. Applications using the Tokio adapters must now enable
