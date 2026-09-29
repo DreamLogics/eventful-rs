@@ -171,7 +171,7 @@ fn async_bind_and_join_from_external_tokio_runtime() {
         .enable_all()
         .build()
         .unwrap();
-    let shard = tokio::TokioShard::new("async-bind");
+    let shard = tokio_rt::TokioShard::new("async-bind");
     rt.block_on(async {
         let state = shard
             .bind_async(|bind| bind(TestState::new()).to_handle())

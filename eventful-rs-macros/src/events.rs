@@ -9,7 +9,12 @@ use crate::{fresh_target, pascal};
 /// visibility, so private interfaces can use private payload types.
 ///
 /// Concrete argument types such as `Vec<String>` and `Option<Vec<String>>` are
-/// supported. Traits and methods cannot declare generic parameters (`<T>`).
+/// supported. User-declared generic parameters are not supported. The macro adds
+/// a defaulted receiver-role parameter: `Interface<Role = ()>`. Select a role with
+/// `signal.connect_as::<Role, _>(&listener)`, or use `connect_fn` with a method or
+/// `Fn(&Listener, Args...) + Send + Sync + 'static` callback. Both dispatch on the
+/// listener's shard and hold it weakly. Optional `#[events(ExtraTrait)]` receiver
+/// bounds also apply to callbacks. Ordinary `connect` selects the default `()` role.
 ///
 /// Attach it to a source with `#[eventful(Interface)]` and implement it on
 /// listeners. `source.event_name().connect(&listener)` dispatches callbacks on
@@ -31,6 +36,8 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         Some(parse_macro_input!(attr as syn::Path))
     };
     let mut trait_item = parse_macro_input!(item as ItemTrait);
+    // Include macro arguments and label attributes before removing them below.
+    let declaration = quote!(#trait_item #event_trait).to_string();
     if !trait_item.generics.params.is_empty() {
         return syn::Error::new_spanned(
             &trait_item.generics,
@@ -108,6 +115,24 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
     let ext_signals_name = format_ident!("{}SignalsExt", trait_name);
     let ext_emitter_name = format_ident!("{}EmittersExt", trait_name);
 
+    // Reserve a parameter name absent from the declaration, including payload paths.
+    let mut role = format_ident!("__EventfulRole");
+    while declaration
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|word| role == word)
+    {
+        role = format_ident!("{}_", role);
+    }
+    trait_item
+        .generics
+        .params
+        .push(syn::parse_quote!(#role = ()));
+    let extra_bound = event_trait.as_ref().map(|path| quote!(+ #path));
+    let callback_bound = quote! {
+        #runtime::Eventful + #runtime::HasEvents<T::EventSetType>
+            #extra_bound + Sized + 'static
+    };
+
     let methods = trait_item
         .items
         .iter()
@@ -158,29 +183,16 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         methods.iter().zip(&labels)
     {
         let target_ident = fresh_target(arg_names);
+        let dispatch_args = (0..arg_names.len())
+            .map(|index| format_ident!("__eventful_arg_{}", index))
+            .collect::<Vec<_>>();
         let plain_name = method_name.to_string();
         let plain_name = plain_name.strip_prefix("r#").unwrap_or(&plain_name);
         let emit_tracked_name = format_ident!("emit_{}_tracked", plain_name);
         let emit_name = format_ident!("emit_{}", plain_name);
 
-        let trait_bound = if let Some(event_trait) = &event_trait {
-            quote! {
-                #runtime::Eventful
-                        + #runtime::HasEvents<T::EventSetType>
-                        + #trait_name
-                        + #event_trait
-                        + Sized
-                        + 'static
-            }
-        } else {
-            quote! {
-                #runtime::Eventful
-                        + #runtime::HasEvents<T::EventSetType>
-                        + #trait_name
-                        + Sized
-                        + 'static
-            }
-        };
+        let trait_bound = quote!(#callback_bound + #trait_name);
+        let role_bound = quote!(#callback_bound + #trait_name<#role>);
         let label_type = label.as_ref().map(|ty| quote!(#ty)).unwrap_or(quote!(()));
         let mut reserved = arg_names.clone();
         reserved.push(target_ident.clone());
@@ -192,28 +204,43 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         } else {
             quote!(())
         };
-        let labelled_connect = label.as_ref().map(|ty| quote! {
-            /// Subscribe using `subscription.matches(&emitted)` before queuing delivery.
-            /// The receiver is held weakly. Dropping the connection keeps it active;
-            /// use `disconnect` or `scoped` to remove the subscription.
-            pub fn connect_labelled<T, S>(&self, target: &S, label: #ty)
-                -> #runtime::Connection<(#(#arg_types,)*), #ty>
-            where
-                T: #trait_bound,
-                S: #runtime::Sharded<T>,
-                #(#arg_types: Clone + Send + 'static,)*
-            {
-                let handle = #runtime::ShardHandle::downgrade(&#runtime::Sharded::to_handle(target));
-                let tracked_handle = handle.clone();
-                self.inner.add_labelled_tracked_connection(Some(label), move |(#(#arg_names,)*)| {
-                    #runtime::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
-                        #target_ident.#method_name(#(#arg_names),*);
-                    });
-                }, move |(#(#arg_names,)*)| {
-                    tracked_handle.try_deferred_upgrade_in_shard(async move |#target_ident| {
-                        #target_ident.#method_name(#(#arg_names),*);
-                    })
-                })
+        let labelled_connect = label.as_ref().map(|ty| {
+            quote! {
+                /// Subscribe using `subscription.matches(&emitted)` before queuing delivery.
+                /// The receiver is held weakly. Dropping the connection keeps it active;
+                /// use `disconnect` or `scoped` to remove the subscription.
+                pub fn connect_labelled<T, S>(&self, target: &S, label: #ty)
+                    -> #runtime::Connection<(#(#arg_types,)*), #ty>
+                where
+                    T: #trait_bound,
+                    S: #runtime::Sharded<T>,
+                    #(#arg_types: Clone + Send + 'static,)*
+                {
+                    self.connect_labelled_as::<(), T>(target, label)
+                }
+
+                /// Subscribe to matching labels using the selected receiver role.
+                pub fn connect_labelled_as<#role: 'static, T>(
+                    &self, target: &impl #runtime::Sharded<T>, label: #ty,
+                ) -> #runtime::Connection<(#(#arg_types,)*), #ty>
+                where
+                    T: #role_bound,
+                    #(#arg_types: Clone + Send + 'static,)*
+                {
+                    self.connect_labelled_fn(target, label, <T as #trait_name<#role>>::#method_name)
+                }
+
+                /// Subscribe a callback to matching labels on the receiver's shard.
+                pub fn connect_labelled_fn<T>(
+                    &self, target: &impl #runtime::Sharded<T>, label: #ty,
+                    callback: impl Fn(&T, #(#arg_types),*) + Send + Sync + 'static,
+                ) -> #runtime::Connection<(#(#arg_types,)*), #ty>
+                where
+                    T: #callback_bound,
+                    #(#arg_types: Clone + Send + 'static,)*
+                {
+                    self.connect_callback(target, Some(label), callback)
+                }
             }
         });
         signal_defs.push(quote! {
@@ -243,15 +270,56 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
                     S: #runtime::Sharded<T>,
                     #(#arg_types: Clone + Send + 'static,)*
                 {
+                    self.connect_as::<(), T>(target)
+                }
+
+                /// Subscribe using the selected receiver role.
+                pub fn connect_as<#role: 'static, T>(
+                    &self, target: &impl #runtime::Sharded<T>,
+                ) -> #runtime::Connection<(#(#arg_types,)*), #label_type>
+                where
+                    T: #role_bound,
+                    #(#arg_types: Clone + Send + 'static,)*
+                {
+                    self.connect_fn(target, <T as #trait_name<#role>>::#method_name)
+                }
+
+                /// Run a method or capturing callback on the receiver's shard.
+                /// Captures must be Send + Sync; the receiver itself need not be.
+                pub fn connect_fn<T>(
+                    &self, target: &impl #runtime::Sharded<T>,
+                    callback: impl Fn(&T, #(#arg_types),*) + Send + Sync + 'static,
+                ) -> #runtime::Connection<(#(#arg_types,)*), #label_type>
+                where
+                    T: #callback_bound,
+                    #(#arg_types: Clone + Send + 'static,)*
+                {
+                    self.connect_callback(target, None, callback)
+                }
+
+                /// Share callback storage across ordinary and tracked dispatch.
+                fn connect_callback<T>(
+                    &self, target: &impl #runtime::Sharded<T>,
+                    subscription: Option<#label_type>,
+                    callback: impl Fn(&T, #(#arg_types),*) + Send + Sync + 'static,
+                ) -> #runtime::Connection<(#(#arg_types,)*), #label_type>
+                where
+                    T: #callback_bound,
+                    #(#arg_types: Clone + Send + 'static,)*
+                {
                     let handle = #runtime::ShardHandle::downgrade(&#runtime::Sharded::to_handle(target));
                     let tracked_handle = handle.clone();
-                    self.inner.add_tracked_connection(move |(#(#arg_names,)*)| {
+                    let callback = ::std::sync::Arc::new(callback);
+                    let tracked_callback = callback.clone();
+                    self.inner.add_labelled_tracked_connection(subscription, move |(#(#dispatch_args,)*)| {
+                        let callback = callback.clone();
                         #runtime::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
-                            #target_ident.#method_name(#(#arg_names),*);
+                            callback(#target_ident, #(#dispatch_args),*);
                         });
-                    }, move |(#(#arg_names,)*)| {
+                    }, move |(#(#dispatch_args,)*)| {
+                        let callback = tracked_callback.clone();
                         tracked_handle.try_deferred_upgrade_in_shard(async move |#target_ident| {
-                            #target_ident.#method_name(#(#arg_names),*);
+                            callback(#target_ident, #(#dispatch_args),*);
                         })
                     })
                 }
@@ -313,7 +381,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let connect_calls = methods.iter().map(|(name, _, _, _, cfg)| {
         quote! {
-            #(#cfg)* group.push(self.#name.connect(target));
+            #(#cfg)* group.push(self.#name.connect_as::<#role, T>(target));
         }
     });
     let accessors = methods.iter().map(|(name, signal, _, _, cfg)| {
@@ -323,8 +391,6 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             #visibility fn #name(&self) -> &#signal { &self.#name }
         }
     });
-    let extra_bound = event_trait.as_ref().map(|path| quote!(+ #path));
-
     quote! {
         #trait_item
 
@@ -339,7 +405,19 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         #(#item_cfg)*
-        impl #set_name { #(#accessors)* }
+        impl #set_name {
+            #(#accessors)*
+
+            /// Subscribe the receiver to every signal using the selected role.
+            pub fn connect_events_as<#role: 'static, T>(
+                &self, target: &impl #runtime::Sharded<T>,
+            ) -> #runtime::ConnectionGroup
+            where
+                T: #callback_bound + #trait_name<#role>,
+            {
+                <Self as #runtime::ConnectEventsAs<T, #role>>::connect_events_as(self, target)
+            }
+        }
 
         #(#item_cfg)*
         impl<T> #runtime::ConnectEvents<T> for #set_name
@@ -348,6 +426,18 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
                 + #trait_name #extra_bound + 'static,
         {
             fn connect_events<S: #runtime::Sharded<T>>(&self, target: &S)
+                -> #runtime::ConnectionGroup
+            {
+                self.connect_events_as::<(), T>(target)
+            }
+        }
+
+        #(#item_cfg)*
+        impl<T, #role: 'static> #runtime::ConnectEventsAs<T, #role> for #set_name
+        where
+            T: #callback_bound + #trait_name<#role>,
+        {
+            fn connect_events_as<S: #runtime::Sharded<T>>(&self, target: &S)
                 -> #runtime::ConnectionGroup
             {
                 let mut group = #runtime::ConnectionGroup::default();

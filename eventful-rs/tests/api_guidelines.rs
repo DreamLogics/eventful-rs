@@ -183,9 +183,9 @@ fn runtime_types_have_thread_safe_debuggable_handles() {
     debuggable::<local_rt::LocalShard>();
     #[cfg(feature = "tokio")]
     {
-        debuggable::<tokio::TokioShard>();
+        debuggable::<tokio_rt::TokioShard>();
         debuggable::<tokio_local_rt::TokioLocalShard>();
     }
     #[cfg(feature = "slint")]
-    debuggable::<slint::SlintShard>();
+    debuggable::<slint_rt::SlintShard>();
 }

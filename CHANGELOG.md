@@ -2,6 +2,12 @@
 
 ## 0.1.3 - tbd
 
+- Event interfaces now receive a defaulted role parameter. Use `connect_as` for
+  distinct receiver implementations, including bulk and labelled connections.
+- Added `connect_fn` and `connect_labelled_fn` for methods and capturing callbacks
+  dispatched on the receiver's shard, without implementing the event interface.
+- Fixed the Slint module declaration after the runtime module rename.
+
 - Renamed shard runtime modules with more fitting names, also makes it less likely there will be name collisions.
 
 ## 0.1.2 - 2026-09-28

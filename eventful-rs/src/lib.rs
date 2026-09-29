@@ -36,7 +36,7 @@ pub mod tokio_rt;
 pub mod tokio_local_rt;
 
 #[cfg(feature = "slint")]
-pub mod slint;
+pub mod slint_rt;
 
 mod error;
 pub use error::{ShardError, ShardId};

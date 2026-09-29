@@ -16,7 +16,7 @@ pub trait ShardAffinity: 'static {
 /// use eventful_rs::*;
 /// #[eventful(shard = DynamicShard)]
 /// struct Session;
-/// let worker = shard::Shard::new("session-worker");
+/// let worker = std_rt::Shard::new("session-worker");
 /// let session = futures::executor::block_on(worker.bind_async(|bind| {
 ///     bind(Session { events: Default::default() }).to_handle()
 /// }))?;

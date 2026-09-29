@@ -118,7 +118,7 @@ fn standard_joined_callbacks() {
 #[cfg(feature = "tokio")]
 #[test]
 fn tokio_joined_callbacks() {
-    let shard = tokio::TokioShard::new("joined-tokio");
+    let shard = tokio_rt::TokioShard::new("joined-tokio");
     exercise(&shard);
     shard.join().unwrap();
 }

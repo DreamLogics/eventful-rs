@@ -123,6 +123,16 @@ where
     fn connect_events<S: crate::Sharded<T>>(&self, target: &S) -> ConnectionGroup;
 }
 
+/// Implemented by event sets that support a connection-selected receiver role.
+/// Role values are never stored or sent between shards.
+pub trait ConnectEventsAs<T, Role>
+where
+    T: crate::Eventful + crate::HasEvents<T::EventSetType> + 'static,
+{
+    /// Subscribe all signals using this role, holding the receiver weakly.
+    fn connect_events_as<S: crate::Sharded<T>>(&self, target: &S) -> ConnectionGroup;
+}
+
 impl<Args, Label> Clone for Connection<Args, Label> {
     fn clone(&self) -> Self {
         Self {

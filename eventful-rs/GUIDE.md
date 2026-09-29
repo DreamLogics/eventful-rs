@@ -303,3 +303,70 @@ for tracked delivery outcomes.
 | **Async method dispatch** | Calling a method through a handle with `#[asynced]`. Polling the call queues it on the object's shard; awaiting it obtains the method's result.                                                                             |
 | **Action**                | A method marked `#[action]` that a handle queues immediately without waiting for a result. The method must return `()`.                                                                                                     |
 | **Runtime backend**       | The implementation that drives a shard, such as the standard thread runtime, Tokio, or Slint's UI loop.                                                                                                                     |
+
+
+## Distinguishing sources and connecting methods
+
+`#[events]` adds a defaulted role parameter to the listener trait. The producer
+and its event storage do not need a role. Select the receiver implementation when
+making a connection:
+
+```rust
+use eventful_rs::*;
+#[events]
+trait PushButtonEvents {
+    fn on_clicked(&self);
+}
+struct ButtonA;
+struct ButtonB;
+#[eventful(PushButtonEvents, shard = DynamicShard)]
+struct PushButton;
+#[eventful(shard = DynamicShard)]
+struct Dialog;
+impl PushButtonEvents<ButtonA> for Dialog {
+    fn on_clicked(&self) { self.pressed_a(); }
+}
+impl PushButtonEvents<ButtonB> for Dialog {
+    fn on_clicked(&self) { self.pressed_b(); }
+}
+impl Dialog {
+    fn pressed_a(&self) {}
+    fn pressed_b(&self) {}
+}
+fn wire(a: &ShardRcHandle<PushButton>, b: &ShardRcHandle<PushButton>, dialog: &ShardRcHandle<Dialog>) {
+    a.on_clicked().connect_as::<ButtonA, _>(dialog);
+    b.on_clicked().connect_as::<ButtonB, _>(dialog);
+}
+```
+
+`impl PushButtonEvents for Dialog` and ordinary `.connect(dialog)` select the
+role `()`. Named roles need no values or marker traits. They describe the role of
+a connection, not an intrinsic identity of the button.
+
+For all events in an interface, use `source.connect_as::<ButtonA, _>(dialog)` on
+a strong handle, or `source.events().connect_events_as::<ButtonA, _>(dialog)`.
+Weak handles return `None` if their event storage has expired.
+`ShardRc::connect_as::<ButtonA, _>(&local_source, dialog)` additionally ties the
+subscriptions to the source value's lifetime, just like `ShardRc::connect`.
+
+To connect a method directly, use
+`a.on_clicked().connect_fn(dialog, Dialog::pressed_a)`. A capturing closure works
+as well: `a.on_clicked().connect_fn(dialog, move |d| d.pressed_a())`.
+Callbacks receive `&Dialog` followed by the event arguments and return `()`.
+They need no event-interface implementation, but still satisfy any extra receiver
+bound declared with `#[events(ExtraTrait)]`.
+
+Callback captures must be `Send + Sync + 'static`; the receiver may contain
+`Rc`, `Cell`, or `RefCell`, since callbacks run on its own shard. The connection
+holds the receiver weakly. Explicitly capturing a strong handle in a closure
+retains that handle in the usual way.
+
+Labelled signals also offer `connect_labelled_as::<ButtonA, _>(dialog, label)`
+and `connect_labelled_fn(dialog, label, callback)`. Labels filter emissions;
+roles select the receiver implementation. Unlabelled connections to labelled
+signals receive every emission.
+
+All these methods return the existing connection tokens or groups. Dropping a
+plain token leaves the subscription active; use `disconnect()` or retain a
+`scoped()` guard for cleanup. Tracked emission waits for selected callbacks to
+finish and reports dispatch failures or panics.

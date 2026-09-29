@@ -13,7 +13,7 @@ help: this trait has no implementations, consider adding one
  --> tests/ui/incompatible_bulk_listener.rs:3:1
   |
 3 | trait Updates { fn updated(&self); }
-  | ^^^^^^^^^^^^^
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: required for `UpdatesEventSet` to implement `ConnectEvents<Listener>`
  --> tests/ui/incompatible_bulk_listener.rs:2:1
   |

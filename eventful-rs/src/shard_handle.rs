@@ -445,6 +445,24 @@ where
             .push(group.clone().scoped());
         group
     }
+
+    /// Connect all signals with a receiver role; the local source owns cleanup.
+    /// Dropping the returned token leaves connections active until source destruction.
+    pub fn connect_as<Role: 'static, U>(
+        this: &Self,
+        target: &impl Sharded<U>,
+    ) -> crate::ConnectionGroup
+    where
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
+        T::EventSetType: crate::ConnectEventsAs<U, Role>,
+    {
+        let group = crate::ConnectEventsAs::<U, Role>::connect_events_as(&*this.events, target);
+        this.inner
+            .connections
+            .borrow_mut()
+            .push(group.clone().scoped());
+        group
+    }
 }
 
 impl<T> ShardRcHandle<T>
@@ -462,6 +480,16 @@ where
     {
         crate::ConnectEvents::connect_events(&*self.events, target)
     }
+
+    /// Connect all signals with a receiver role, holding the receiver weakly.
+    /// Use disconnect() or scoped() for cleanup; dropping the token leaves it active.
+    pub fn connect_as<Role: 'static, U>(&self, target: &impl Sharded<U>) -> crate::ConnectionGroup
+    where
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
+        T::EventSetType: crate::ConnectEventsAs<U, Role>,
+    {
+        crate::ConnectEventsAs::<U, Role>::connect_events_as(&*self.events, target)
+    }
 }
 
 impl<T> ShardWeakHandle<T>
@@ -478,6 +506,22 @@ where
     {
         let events = self.events.upgrade()?;
         Some(crate::ConnectEvents::connect_events(&*events, target))
+    }
+
+    /// Connect all signals with a receiver role if the source event set still exists.
+    /// Returns None for an expired source; the receiver is held weakly.
+    pub fn connect_as<Role: 'static, U>(
+        &self,
+        target: &impl Sharded<U>,
+    ) -> Option<crate::ConnectionGroup>
+    where
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
+        T::EventSetType: crate::ConnectEventsAs<U, Role>,
+    {
+        let events = self.events.upgrade()?;
+        Some(crate::ConnectEventsAs::<U, Role>::connect_events_as(
+            &*events, target,
+        ))
     }
 }
 
