@@ -1,5 +1,5 @@
 #![cfg(feature = "slint")]
-use eventful_rs::{EventLoop, EventLoopHandle, Eventful};
+use eventful_rs::{EventLoop, EventLoopHandle, Eventful, InvokeError, ShardRc};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use std::{rc::Rc, sync::mpsc, time::Duration};
 
@@ -55,7 +55,25 @@ impl Platform for Headless {
 fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
     let (tx, rx) = mpsc::channel();
     slint::platform::set_platform(Box::new(Headless { tx, rx })).unwrap();
+    // Lazy initialization must make binding available before the driver is polled.
+    let local = ShardRc::try_bind(UiState {
+        value: Rc::new(13),
+        events: Default::default(),
+    })
+    .unwrap();
+    assert_eq!(*local.value, 13);
     let shard = Ui::shard();
+    std::thread::spawn(|| {
+        assert!(matches!(
+            ShardRc::try_bind(UiState {
+                value: Rc::new(0),
+                events: Default::default(),
+            }),
+            Err(InvokeError::WrongShard)
+        ));
+    })
+    .join()
+    .unwrap();
     let state = UiState::spawn(|| UiState {
         value: Rc::new(11),
         events: Default::default(),
@@ -74,6 +92,12 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
     .join()
     .unwrap();
     slint::spawn_local(async move {
+        let bound = ShardRc::try_bind(UiState {
+            value: Rc::new(17),
+            events: Default::default(),
+        })
+        .unwrap();
+        assert_eq!(*bound.value, 17);
         assert_eq!(result.await.unwrap(), owner);
         let state = state.await.unwrap();
         assert_eq!(
@@ -87,6 +111,13 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
             Ok(11)
         );
         shard.shutdown_async().await.unwrap();
+        assert!(matches!(
+            ShardRc::try_bind(UiState {
+                value: Rc::new(0),
+                events: Default::default(),
+            }),
+            Err(InvokeError::WrongShard)
+        ));
         slint::quit_event_loop().unwrap();
     })
     .unwrap();

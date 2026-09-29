@@ -25,7 +25,9 @@ impl SlintShard {
     pub fn shard_id(&self) -> ShardId {
         self.shard_id
     }
-    /// Schedule the driver on the current UI thread.
+    /// Register this shard on the current UI thread and schedule its driver.
+    /// Values can be bound with [`ShardRc::try_bind`] immediately, including
+    /// before the event loop starts and from Slint callbacks or local tasks.
     ///
     /// # Panics
     /// Panics if the Slint event loop is unavailable.
@@ -52,6 +54,9 @@ impl SlintShard {
             .expect("Slint local executor unavailable");
         })
         .expect("Slint event loop unavailable");
+        // Binding on the UI thread must not depend on when Slint first polls
+        // the driver. Its ContextGuard takes over cleanup when it runs.
+        let _ = engine::store(shard_id);
         Self {
             handle,
             shard_id,
