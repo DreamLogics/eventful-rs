@@ -44,3 +44,20 @@ fn condition(meta: &Meta) -> syn::Result<Option<Meta>> {
         Ok(Some(parse_quote!(cfg_attr(#predicate, #(#nested),*))))
     }
 }
+
+/// Convert a propagated condition into a boolean cfg predicate.
+pub(crate) fn predicate(meta: &Meta) -> syn::Result<Meta> {
+    let Meta::List(list) = meta else {
+        return Err(syn::Error::new_spanned(meta, "expected cfg condition"));
+    };
+    if meta.path().is_ident("cfg") {
+        return list.parse_args();
+    }
+    let parts = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+    let mut parts = parts.into_iter();
+    let condition = parts.next().unwrap();
+    let nested = parts
+        .map(|part| predicate(&part))
+        .collect::<syn::Result<Vec<_>>>()?;
+    Ok(parse_quote!(any(not(#condition), all(#(#nested),*))))
+}

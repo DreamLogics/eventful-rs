@@ -254,10 +254,6 @@ fn default_roles_callback_only_receivers_and_marker_hygiene() {
         *seen.lock().unwrap(),
         ["default", "role", "callback", "only"]
     );
-    // Empty generated event sets accept role-based bulk connections as no-ops.
-    callback_only
-        .connect_as::<LocalRole, _>(&receiver)
-        .disconnect();
     let button = button(&shard);
     button.clicked().connect_fn(&callback_only, |r| {
         r.seen.lock().unwrap().push("extra-bound")

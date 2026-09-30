@@ -32,6 +32,22 @@ pub trait Eventful {
         Self::Shard::handle().bind_async(move |bind| bind(factory()).to_handle())
     }
 
+    /// Bind immediately on the named shard's current thread, returning a local reference.
+    /// Unlike [`Self::spawn`], this does not queue work or require an async context.
+    ///
+    /// # Errors
+    /// Returns [`InvokeError::WrongShard`] outside the named shard's context.
+    ///
+    /// # Panics
+    /// A custom shard binding may panic while initializing its handle.
+    fn bind_local(value: Self) -> Result<crate::ShardRc<Self>, InvokeError>
+    where
+        Self: Sized + HasEvents<Self::EventSetType> + 'static,
+        Self::Shard: ShardBinding,
+    {
+        crate::ShardRc::try_bind(value)
+    }
+
     /// Recover a strong handle to this value from its named shard's store.
     /// Returns None outside the owner thread's context or if the value is not registered.
     fn as_rc_handle(&self) -> Option<ShardRcHandle<Self>>

@@ -269,6 +269,47 @@ renderer. Initialize the shard on the UI thread, and await `shutdown_async()`
 before quitting the UI loop. See the [Slint module](https://docs.rs/eventful-rs/latest/eventful_rs/slint/)
 for integration details.
 
+### Local values and UI callbacks
+
+`Self::spawn(factory)` queues construction and returns a future yielding a strong
+remote handle. `Self::bind_local(value)` binds immediately on the named shard's
+thread and returns `Result<ShardRc<Self>, InvokeError>`. It keeps the usual explicit
+struct initialization, including `events: Default::default()`.
+
+Connect a local source with `source.connect_to(&receiver)`. The direction is always
+source to receiver; the source must declare outgoing events. The receiver only
+needs to implement their handlers. `ShardRc::connect_to(&source, &receiver)` is
+available if the wrapped value has a method with the same name. The existing
+`ShardRc::connect` remains supported.
+
+Use `ShardRc::downgrade(&window)` for a local weak reference and `.upgrade()` to
+recover an optional local strong reference synchronously. These references cannot
+cross threads. Existing `ShardWeakHandle` remains the weak handle for queued access.
+The store collects unused values periodically, so weak upgrades can succeed until
+collection occurs. A local strong reference can also keep a value alive after
+shard shutdown; upgrading it does not restart event delivery.
+
+For callbacks owned by the UI, capture a weak reference instead of cloning the
+window into its own callback:
+
+```rust,ignore
+let cancel = window.weak_callback(|window, ()| {
+    window.emit_on_close();
+    window.hide().unwrap();
+});
+window.ui.on_cancel(move || cancel(()));
+
+let edit = window.weak_callback(|window, id| window.edit_paragraph(id));
+window.ui.on_edit_paragraph(edit);
+```
+
+`weak_callback` skips calls once the value is destroyed. It takes one argument;
+use `()` for zero arguments or a tuple adapter for multiple arguments. These
+callbacks run synchronously on the calling thread without queuing. For callbacks
+returning a value, `weak_callback_or_else(handler, fallback)` requires an explicit
+fallback closure receiving the same argument. Avoid capturing a strong reference
+to the owner inside either closure, which would reintroduce the cycle.
+
 ## Where to go next
 
 The [runnable examples](https://github.com/DreamLogics/eventful-rs/tree/main/examples)

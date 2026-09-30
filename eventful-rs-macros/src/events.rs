@@ -174,6 +174,23 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(error) => return error.to_compile_error().into(),
     };
 
+    // Bulk connections require at least one signal enabled in this build.
+    let enabled = methods
+        .iter()
+        .map(|(_, _, _, _, attrs)| {
+            let predicates = attrs
+                .iter()
+                .map(|attr| crate::attributes::predicate(&attr.meta))
+                .collect::<syn::Result<Vec<_>>>()?;
+            Ok(quote!(all(#(#predicates),*)))
+        })
+        .collect::<syn::Result<Vec<_>>>();
+    let enabled = match enabled {
+        Ok(enabled) => enabled,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    let bulk_cfg = quote!(#[cfg(any(#(#enabled),*))]);
+
     let mut signal_defs = Vec::new();
     let mut set_fields = Vec::new();
     let mut extension_signal_methods = Vec::new();
@@ -408,6 +425,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         impl #set_name {
             #(#accessors)*
 
+            #bulk_cfg
             /// Subscribe the receiver to every signal using the selected role.
             pub fn connect_events_as<#role: 'static, T>(
                 &self, target: &impl #runtime::Sharded<T>,
@@ -420,6 +438,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         #(#item_cfg)*
+        #bulk_cfg
         impl<T> #runtime::ConnectEvents<T> for #set_name
         where
             T: #runtime::Eventful + #runtime::HasEvents<T::EventSetType>
@@ -433,6 +452,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         #(#item_cfg)*
+        #bulk_cfg
         impl<T, #role: 'static> #runtime::ConnectEventsAs<T, #role> for #set_name
         where
             T: #callback_bound + #trait_name<#role>,

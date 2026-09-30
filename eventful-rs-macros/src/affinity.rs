@@ -203,30 +203,6 @@ pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
             #visibility struct #trait_ident_set {}
 
             #(#item_cfg)*
-            impl<T> #runtime::ConnectEvents<T> for #trait_ident_set
-            where
-                T: #runtime::Eventful + #runtime::HasEvents<T::EventSetType> + 'static,
-            {
-                fn connect_events<S: #runtime::Sharded<T>>(&self, _target: &S)
-                    -> #runtime::ConnectionGroup
-                {
-                    #runtime::ConnectionGroup::default()
-                }
-            }
-
-            #(#item_cfg)*
-            impl<T, Role> #runtime::ConnectEventsAs<T, Role> for #trait_ident_set
-            where
-                T: #runtime::Eventful + #runtime::HasEvents<T::EventSetType> + 'static,
-            {
-                fn connect_events_as<S: #runtime::Sharded<T>>(&self, _target: &S)
-                    -> #runtime::ConnectionGroup
-                {
-                    #runtime::ConnectionGroup::default()
-                }
-            }
-
-            #(#item_cfg)*
             impl Default for #trait_ident_set {
                 fn default() -> Self {
                     #trait_ident_set {}

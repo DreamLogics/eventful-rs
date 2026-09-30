@@ -115,18 +115,18 @@ fn local_binding_is_fallible_and_preserves_application_methods() {
         events: Default::default(),
     };
     assert!(matches!(
-        ShardRc::try_bind(value),
+        Local::bind_local(value),
         Err(InvokeError::WrongShard)
     ));
     Main::shard().run_main(|| async {
-        let local = ShardRc::try_bind(Local {
+        let local = Local::bind_local(Local {
             events: Default::default(),
         })
         .unwrap();
         assert_eq!(local.connect(), 42); // No inherent smart-pointer method shadows T.
         debug(&local);
         debug(&local.to_handle());
-        let _subscriptions = ShardRc::connect(&local, &local).scoped();
+        debug(&ShardRc::downgrade(&local));
     });
 }
 

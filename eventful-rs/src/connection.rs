@@ -115,6 +115,10 @@ impl Drop for ScopedConnectionGroup {
 }
 
 /// Implemented by generated event sets for compatible listener types.
+#[diagnostic::on_unimplemented(
+    message = "source event interface cannot connect to this receiver",
+    note = "connect_to connects source events to receiver handlers; the source must declare at least one enabled event and the receiver must implement its interface"
+)]
 pub trait ConnectEvents<T>
 where
     T: crate::Eventful + crate::HasEvents<T::EventSetType> + 'static,

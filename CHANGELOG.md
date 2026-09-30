@@ -2,6 +2,14 @@
 
 ## 0.1.3 - tbd
 
+- Added local `ShardWeak` references and `weak_callback` / `weak_callback_or_else`
+  helpers for callbacks that must not retain their owner.
+- Added `connect_to` on local references and strong remote handles.
+- Bulk connections from empty event sources now fail at compile time, including
+  interfaces whose signals are all disabled by conditional compilation. Receivers
+  may still have no outgoing events.
+- Added `Eventful::bind_local` as the synchronous local counterpart to `spawn`.
+
 - Fixed an issue with the Slint shard runtime, where one couldn't create a ShardRc prior to the Slint event-loop being started.
 - Event interfaces now receive a defaulted role parameter. Use `connect_as` for
   distinct receiver implementations, including bulk and labelled connections.

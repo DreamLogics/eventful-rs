@@ -10,6 +10,7 @@ mod declaration;
 mod dispatch;
 mod entry;
 mod events;
+mod slint_events;
 
 /// Define a typed event interface with synchronous `&self` methods.
 /// Generated signal-access and emitter extension traits inherit the interface
@@ -33,6 +34,23 @@ mod events;
 #[proc_macro_attribute]
 pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
     events::events(attr, item)
+}
+
+/// Turn explicitly declared Slint callbacks into a typed event interface.
+///
+/// `#[slint_events(component = MyUi)] trait UiEvents { fn save(&self); }`
+/// generates the ordinary event API and `UiEventsBridge::new(&ui)`. Retain the
+/// bridge in the wrapper and call `bridge.connect_to(&wrapper)` to queue events
+/// on its shard. Callback names map to Slint's `on_*` setters, with matching
+/// argument types. Arguments must implement Clone + Send + 'static.
+///
+/// Only callbacks without return values are supported. Installation replaces
+/// existing handlers for the listed callbacks. The bridge does not retain the
+/// component, and callbacks reference the bridge weakly. Dropping it disables
+/// forwarding without removing subsequently installed handlers.
+#[proc_macro_attribute]
+pub fn slint_events(attr: TokenStream, item: TokenStream) -> TokenStream {
+    slint_events::slint_events(attr, item)
 }
 
 /// Generate handle wrappers for annotated methods in an inherent `impl`.

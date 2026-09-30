@@ -56,7 +56,7 @@ fn bulk_connections_deliver_and_disconnect_through_local_strong_and_weak_sources
         .to_handle()
     });
     let retained = source.count().connect(&target);
-    let group = source.connect(&target);
+    let group = source.connect_to(&target);
     emit(&source);
     assert_eq!(*log.lock().unwrap(), ["name", "7", "7", "done"]);
     log.lock().unwrap().clear();
@@ -89,7 +89,7 @@ fn bulk_connections_deliver_and_disconnect_through_local_strong_and_weak_sources
         let local = bind(Source {
             events: Default::default(),
         });
-        let group = ShardRc::connect(&local, &destination);
+        let group = local.connect_to(&destination);
         (local.to_handle(), group)
     });
     emit(&local_source);
@@ -99,15 +99,6 @@ fn bulk_connections_deliver_and_disconnect_through_local_strong_and_weak_sources
     emit(&local_source);
     assert!(log.lock().unwrap().is_empty());
 
-    // Empty event sets produce a valid no-op group, and a local target is accepted.
-    b.bind(move |bind| {
-        let local = bind(Listener {
-            log,
-            owner: std::thread::current().id(),
-            events: Default::default(),
-        });
-        ShardRc::connect(&local, &local).disconnect();
-    });
     drop(source);
     a.join().unwrap();
     assert!(weak.connect(&target).is_none());

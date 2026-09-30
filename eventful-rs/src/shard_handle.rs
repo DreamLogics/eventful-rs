@@ -139,6 +139,107 @@ where
     }
 }
 
+/// Weak shard-local reference. It is neither Send nor Sync and does not keep the value alive.
+/// Values remain upgradeable until the shard collects them; collection is periodic.
+/// A surviving local strong reference also permits upgrades after shard shutdown.
+pub struct ShardWeak<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Weak reference to the local allocation.
+    inner: std::rc::Weak<ShardValue<T>>,
+    /// Weak lifetime token shared with remote strong handles.
+    id: std::sync::Weak<usize>,
+    /// Submission handle, which does not retain the value.
+    shard_handle: crate::ShardEventHandle,
+}
+
+impl<T> Clone for ShardWeak<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            id: self.id.clone(),
+            shard_handle: self.shard_handle.clone(),
+        }
+    }
+}
+
+impl<T> std::fmt::Debug for ShardWeak<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShardWeak").finish_non_exhaustive()
+    }
+}
+
+impl<T> ShardWeak<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Upgrade synchronously if the local allocation is still alive.
+    pub fn upgrade(&self) -> Option<ShardRc<T>> {
+        Some(ShardRc::new(
+            ShardRcId {
+                id: self.id.upgrade()?,
+            },
+            self.inner.upgrade()?,
+            self.shard_handle.clone(),
+        ))
+    }
+}
+
+impl<T> ShardRc<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Create a weak local reference without retaining the value.
+    pub fn downgrade(this: &Self) -> ShardWeak<T> {
+        ShardWeak {
+            inner: Rc::downgrade(&this.inner),
+            id: Arc::downgrade(&this.id.id),
+            shard_handle: this.shard_handle.clone(),
+        }
+    }
+
+    /// Create a synchronous callback that skips calls after the value is collected.
+    /// Use `()` for no arguments and a tuple for multiple arguments. The callback
+    /// receives a local strong reference for the duration of the call.
+    /// Capturing another strong reference to this value defeats weak ownership.
+    pub fn weak_callback<A, F>(&self, callback: F) -> impl Fn(A) + 'static
+    where
+        F: Fn(&ShardRc<T>, A) + 'static,
+    {
+        let weak = Self::downgrade(self);
+        move |args| {
+            if let Some(value) = weak.upgrade() {
+                callback(&value, args);
+            }
+        }
+    }
+
+    /// Create a synchronous callback with an explicit fallback for an expired value.
+    /// Use `()` for no arguments and a tuple for multiple arguments.
+    pub fn weak_callback_or_else<A, R, F, G>(
+        &self,
+        callback: F,
+        fallback: G,
+    ) -> impl Fn(A) -> R + 'static
+    where
+        F: Fn(&ShardRc<T>, A) -> R + 'static,
+        G: Fn(A) -> R + 'static,
+    {
+        let weak = Self::downgrade(self);
+        move |args| match weak.upgrade() {
+            Some(value) => callback(&value, args),
+            None => fallback(args),
+        }
+    }
+}
+
 impl<T> Sharded<T> for ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + 'static,
@@ -426,6 +527,17 @@ impl<T> ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + 'static,
 {
+    /// Connect this source's events to a receiver, retaining subscriptions with this value.
+    /// The receiver is held weakly. Sources without events cannot be bulk-connected.
+    pub fn connect_to<U, S>(&self, target: &S) -> crate::ConnectionGroup
+    where
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
+        S: Sharded<U>,
+        T::EventSetType: crate::ConnectEvents<U>,
+    {
+        Self::connect(self, target)
+    }
+
     /// Connect every event in this source's interface to a compatible listener.
     /// The underlying value owns these subscriptions and disconnects them when
     /// it is destroyed. Local clones and strong handles keep that value alive
@@ -469,6 +581,17 @@ impl<T> ShardRcHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + 'static,
 {
+    /// Connect this source's events to a receiver held weakly.
+    /// Dropping the returned token leaves subscriptions active.
+    pub fn connect_to<U, S>(&self, target: &S) -> crate::ConnectionGroup
+    where
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
+        S: Sharded<U>,
+        T::EventSetType: crate::ConnectEvents<U>,
+    {
+        self.connect(target)
+    }
+
     /// Connect every event in this source's interface to a compatible listener.
     /// Dropping the returned group keeps subscriptions active; use disconnect()
     /// or scoped() to remove them. Registration is per signal, not atomic.
