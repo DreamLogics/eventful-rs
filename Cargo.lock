@@ -418,6 +418,7 @@ dependencies = [
  "eventful-rs-macros",
  "futures",
  "futures-timer",
+ "i-slint-renderer-software",
  "slint",
  "tokio",
  "trybuild",

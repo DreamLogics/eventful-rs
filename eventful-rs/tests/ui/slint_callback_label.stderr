@@ -1,0 +1,5 @@
+error: Slint callback bridges do not support event labels
+ --> tests/ui/slint_callback_label.rs:5:5
+  |
+5 |     #[with_label(usize)]
+  |     ^^^^^^^^^^^^^^^^^^^^

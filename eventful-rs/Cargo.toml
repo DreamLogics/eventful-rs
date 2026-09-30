@@ -45,6 +45,8 @@ slint = { version = "1.18", default-features = false, features = [
 ], optional = true }
 
 [dev-dependencies]
+# Headless component adapter for the Slint callback integration test.
+i-slint-renderer-software = "1.18"
 trybuild = "1"
 
 [package.metadata.docs.rs]

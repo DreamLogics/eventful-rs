@@ -1,5 +1,5 @@
 #![cfg(feature = "slint")]
-use eventful_rs::{EventLoop, EventLoopHandle, Eventful, InvokeError, ShardRc};
+use eventful_rs::{EventLoop, EventLoopHandle, Eventful, HasEvents, InvokeError, ShardRc};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use std::{cell::RefCell, rc::Rc, sync::mpsc, time::Duration};
 
@@ -35,6 +35,36 @@ struct CallbackOwner {
     value: std::cell::Cell<usize>,
 }
 
+slint::slint! {
+    export component BridgeTestUi inherits Window {
+        callback save();
+        callback edit-paragraph(string, int);
+    }
+}
+
+#[eventful_rs::slint_events(component = BridgeTestUi)]
+trait UiActions {
+    fn save(&self);
+    fn edit_paragraph(&self, id: slint::SharedString, index: i32);
+    #[cfg(any())]
+    fn nonexistent(&self, missing: MissingType);
+}
+
+#[eventful_rs::eventful(shard = Ui)]
+struct BridgedWindow {
+    ui: BridgeTestUi,
+    bridge: UiActionsBridge,
+    calls: RefCell<Vec<String>>,
+}
+impl UiActions for BridgedWindow {
+    fn save(&self) {
+        self.calls.borrow_mut().push("save".into());
+    }
+    fn edit_paragraph(&self, id: slint::SharedString, index: i32) {
+        self.calls.borrow_mut().push(format!("{id}:{index}"));
+    }
+}
+
 enum Message {
     Invoke(Box<dyn FnOnce() + Send>),
     Quit,
@@ -61,7 +91,9 @@ struct Headless {
 }
 impl Platform for Headless {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-        Err(slint::PlatformError::Unsupported)
+        Ok(i_slint_renderer_software::MinimalSoftwareWindow::new(
+            i_slint_renderer_software::RepaintBufferType::NewBuffer,
+        ))
     }
     fn new_event_loop_proxy(&self) -> Option<Box<dyn EventLoopProxy>> {
         Some(Box::new(Proxy(self.tx.clone())))
@@ -137,6 +169,60 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
         source.emit_changed(3);
         source.emit_changed_tracked(4).await.unwrap();
         assert_eq!(*listener.received.borrow(), [1, 2, 3, 4]);
+        // Generated Slint callbacks forward to a wrapper on the same UI shard.
+        let ui = BridgeTestUi::new().unwrap();
+        let bridge = UiActionsBridge::new(&ui);
+        let window = BridgedWindow::bind_local(BridgedWindow {
+            ui,
+            bridge,
+            calls: RefCell::default(),
+            events: Default::default(),
+        })
+        .unwrap();
+        window.bridge.connect_to(&window);
+        window.ui.invoke_save();
+        window.ui.invoke_edit_paragraph("paragraph".into(), 7);
+        assert!(window.calls.borrow().is_empty());
+        // A tracked event on the same receiver observes the preceding queued calls.
+        window.bridge.emit_save_tracked().await.unwrap();
+        assert_eq!(*window.calls.borrow(), ["save", "paragraph:7", "save"]);
+
+        // Reinstalling replaces the callbacks. Dropping the old bridge must not
+        // clear newer handlers, and retaining old event storage must not keep it active.
+        let ui = BridgeTestUi::new().unwrap();
+        let old_bridge = UiActionsBridge::new(&ui);
+        old_bridge.connect_to(&window);
+        let retained_events = old_bridge.events().clone();
+        let new_bridge = UiActionsBridge::new(&ui);
+        new_bridge.connect_to(&window);
+        drop(old_bridge);
+        ui.invoke_save();
+        new_bridge.emit_save_tracked().await.unwrap();
+        assert_eq!(window.calls.borrow().len(), 5);
+        let retained_new_events = new_bridge.events().clone();
+        drop(new_bridge);
+        ui.invoke_save(); // Neither retained event set keeps forwarding alive.
+        window.bridge.emit_save_tracked().await.unwrap();
+        assert_eq!(window.calls.borrow().len(), 6);
+        drop((retained_events, retained_new_events));
+
+        let weak_window = ShardRc::downgrade(&window);
+        drop(window); // UI -> callback -> bridge -> receiver must not form a cycle.
+        let collect_window = async {
+            while weak_window.upgrade().is_some() {
+                futures_timer::Delay::new(Duration::from_millis(10)).await;
+            }
+        };
+        futures::pin_mut!(collect_window);
+        assert!(matches!(
+            futures::future::select(
+                collect_window,
+                futures_timer::Delay::new(Duration::from_secs(2))
+            )
+            .await,
+            futures::future::Either::Left(_)
+        ));
+
         let callback_owner = CallbackOwner::bind_local(CallbackOwner {
             callback: RefCell::default(),
             value: std::cell::Cell::new(0),

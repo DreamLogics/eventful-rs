@@ -13,8 +13,14 @@ created by `use_shard!(shard = Marker);` in the current module. A missing
 uses the runtime crate's `declare_shard!` macro. It does not select a scope default.
 
 `#[events]` also implements `ConnectEvents<Listener>` for its generated event set,
-enabling `source.connect(&listener)` on shard references and handles. Bulk connections
+enabling `source.connect_to(&listener)` on shard references and handles. Bulk connections
 use the same weak targets, delivery paths, and listener bounds as individual signals.
+
+`#[slint_events(component = Ui)]` adds a generated `InterfaceBridge` to an event
+interface. Construct it with `InterfaceBridge::new(&ui)` and retain it in the
+wrapper; `bridge.connect_to(&wrapper)` forwards the listed Slint callbacks as
+queued events. It supports callbacks without return values and installs weak
+forwarding closures, so the component and wrapper do not retain each other.
 
 ## License
 

@@ -310,6 +310,77 @@ returning a value, `weak_callback_or_else(handler, fallback)` requires an explic
 fallback closure receiving the same argument. Avoid capturing a strong reference
 to the owner inside either closure, which would reintroduce the cycle.
 
+### Bridging Slint callbacks
+
+Use `#[slint_events(component = ComponentType)]` on an explicit callback interface.
+It generates the usual event traits and a `<TraitName>Bridge` source. Callback
+names map to Slint setters: `edit_paragraph` installs `on_edit_paragraph`.
+
+```rust,no_run
+# #[cfg(feature = "slint")]
+# fn example() -> Result<(), Box<dyn std::error::Error>> {
+use eventful_rs::*;
+slint::slint! {
+    export component EditorUi inherits Window {
+        callback save();
+        callback edit-paragraph(string);
+    }
+}
+declare_shard!(UiShard, runtime = slint);
+
+#[slint_events(component = EditorUi)]
+trait UiActions {
+    fn save(&self);
+    fn edit_paragraph(&self, id: slint::SharedString);
+}
+
+#[eventful(shard = UiShard)]
+struct Editor {
+    ui: EditorUi,
+    ui_events: UiActionsBridge,
+}
+impl UiActions for Editor {
+    fn save(&self) { /* save the document */ }
+    fn edit_paragraph(&self, id: slint::SharedString) { /* open the editor */ }
+}
+
+let ui = EditorUi::new()?;
+let ui_events = UiActionsBridge::new(&ui);
+let editor = Editor::bind_local(Editor {
+    ui, ui_events, events: Default::default(),
+})?;
+editor.ui_events.connect_to(&editor);
+// Retain editor in your application and run the Slint event loop.
+# Ok(())
+# }
+```
+
+The bridge is local to the UI thread and retains no component or receiver.
+Store it in the wrapper so it lives as long as the wrapper. Slint callbacks hold
+only a weak reference to the bridge; dropping the bridge stops forwarding even
+if something else retains its event storage. Already queued events can still run.
+
+Installation **replaces** the handlers for the listed callbacks. Later `on_*`
+registrations replace the bridge's handlers in turn. Dropping a bridge does not
+clear or restore handlers, so it cannot accidentally remove a newer registration.
+Unlisted callbacks are unaffected.
+
+Delivery is queued, including delivery to a wrapper on the same UI shard. Handlers
+run after the original Slint callback returns. For async work, a handler can queue
+an existing asynchronous handle method or start a Slint local task.
+
+Callback argument types must match Slint's generated signatures and implement
+`Clone + Send + 'static`, just like ordinary event payloads. For example, use
+`slint::SharedString` for a Slint `string` and convert it in the receiver if needed.
+Payload conversion and local-only payloads require manual callback wiring for now.
+Callbacks with return values and labelled events are not supported by this bridge;
+callbacks needing an immediate result must remain synchronous handlers.
+
+Individual signal connections, `connect_fn`, `connect_as`, and tracked emitters
+are also available through the generated event API. A bridge with no enabled
+callbacks cannot be bulk-connected. Conditional callback declarations propagate
+to the registrations as well as the event interface.
+
 ## Where to go next
 
 The [runnable examples](https://github.com/DreamLogics/eventful-rs/tree/main/examples)

@@ -2,6 +2,10 @@
 
 ## 0.1.3 - tbd
 
+- Added `#[slint_events(component = Ui)]` to generate a typed callback bridge.
+  Store the generated `InterfaceBridge` in a wrapper and use `connect_to` to
+  deliver Slint callbacks as queued events without strong ownership cycles.
+
 - Added local `ShardWeak` references and `weak_callback` / `weak_callback_or_else`
   helpers for callbacks that must not retain their owner.
 - Added `connect_to` on local references and strong remote handles.
