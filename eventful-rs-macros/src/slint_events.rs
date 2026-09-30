@@ -46,6 +46,9 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
     let visibility = &interface.vis;
     let bridge = format_ident!("{}Bridge", name);
     let set = format_ident!("{}EventSet", name);
+    let emissions = format_ident!("{}Emissions", name);
+    let connections = format_ident!("{}Connections", name);
+    let signals_ext = format_ident!("{}SignalsExt", name);
     let item_cfg = crate::attributes::conditions(&interface.attrs)?;
     let mut registrations = Vec::new();
     let mut enabled = Vec::new();
@@ -120,7 +123,7 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
         #visibility struct #bridge {
             /// A separate local lifetime token prevents retained event storage from
             /// extending callback forwarding after this bridge is dropped.
-            events: ::std::rc::Rc<::std::sync::Arc<#set>>,
+            events: ::std::rc::Rc<#emissions>,
         }
 
         #(#item_cfg)*
@@ -129,7 +132,7 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
             /// Handlers are replaced, not chained. Delivery to receivers is queued.
             /// No component or receiver is retained by the installed callbacks.
             #visibility fn new(component: &#component) -> Self {
-                let events = ::std::rc::Rc::new(::std::sync::Arc::new(#set::default()));
+                let events = ::std::rc::Rc::new(#emissions::default());
                 #(#registrations)*
                 Self { events }
             }
@@ -144,24 +147,23 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
                 S: #runtime::Sharded<T>,
                 #set: #runtime::ConnectEvents<T>,
             {
-                #runtime::ConnectEvents::connect_events(&**self.events, receiver)
+                #runtime::ConnectEvents::connect_events(&**self.events.signals(), receiver)
             }
 
-            /// Connect all bridged events using a selected receiver role.
+            /// Select a role for every bridged event.
             #[cfg(any(#(#enabled),*))]
-            #visibility fn connect_as<Role: 'static, T>(&self, receiver: &impl #runtime::Sharded<T>)
-                -> #runtime::ConnectionGroup
-            where
-                T: #runtime::Eventful + #runtime::HasEvents<T::EventSetType> + 'static,
-                #set: #runtime::ConnectEventsAs<T, Role>,
-            {
-                #runtime::ConnectEventsAs::<T, Role>::connect_events_as(&**self.events, receiver)
+            #visibility fn role<Role>(&self) -> #connections<'_, Role> {
+                self.events.signals().role()
             }
+
         }
 
         #(#item_cfg)*
+        impl #signals_ext for #bridge {}
+
+        #(#item_cfg)*
         impl #runtime::HasEvents<#set> for #bridge {
-            fn events(&self) -> &::std::sync::Arc<#set> { &self.events }
+            fn events(&self) -> &::std::sync::Arc<#set> { self.events.signals() }
         }
     })
 }

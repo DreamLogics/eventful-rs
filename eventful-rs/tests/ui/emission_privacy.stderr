@@ -1,0 +1,16 @@
+error[E0616]: field `events` of struct `model::Source` is private
+  --> tests/ui/emission_privacy.rs:10:12
+   |
+10 |     source.events.changed().emit();
+   |            ^^^^^^ private field
+   |
+help: a method `events` also exists, call it with parentheses
+   |
+10 |     source.events().changed().emit();
+   |                  ++
+
+error[E0616]: field `inner` of struct `UpdatesChangedSignal` is private
+  --> tests/ui/emission_privacy.rs:11:22
+   |
+11 |     events.changed().inner.emit(());
+   |                      ^^^^^ private field

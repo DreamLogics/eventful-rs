@@ -46,10 +46,23 @@ fn private_payloads_support_tracked_dispatch() {
     let _plain = listener.changed().connect(&listener).scoped();
     let _labelled = listener
         .labelled()
-        .connect_labelled(&listener, Label)
+        .labelled(Label)
+        .connect(&listener)
         .scoped();
-    block_on(listener.emit_changed_tracked(Payload(2))).unwrap();
-    block_on(listener.emit_labelled_tracked(Label, Payload(3))).unwrap();
+    block_on(listener.deferred_upgrade_in_shard(async move |source| {
+        source.events.changed().tracked().emit(Payload(2)).await
+    }))
+    .unwrap();
+    block_on(listener.deferred_upgrade_in_shard(async move |source| {
+        source
+            .events
+            .labelled()
+            .labelled(Label)
+            .tracked()
+            .emit(Payload(3))
+            .await
+    }))
+    .unwrap();
     assert_eq!(
         block_on(listener.deferred_upgrade_in_shard(async |value| value.count.get())),
         5

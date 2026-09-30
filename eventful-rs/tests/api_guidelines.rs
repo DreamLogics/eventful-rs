@@ -73,14 +73,17 @@ fn conditional_methods_do_not_leak_into_generated_items() {
         .to_handle()
     });
     let _group = state.connect(&state).scoped();
-    block_on(state.emit_changed_tracked(7)).unwrap();
+    block_on(state.deferred_upgrade_in_shard(async move |source| {
+        source.events.changed().tracked().emit(7).await
+    }))
+    .unwrap();
     assert_eq!(block_on(state.read()), 7);
     debug(&shard);
     debug(&state);
     debug(&state.downgrade());
     debug(&state.join(&state).unwrap());
     debug(state.events());
-    debug(state.changed());
+    debug(&state.changed());
     shard.join().unwrap();
 }
 

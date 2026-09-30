@@ -70,7 +70,11 @@ impl NotificationBus {
     /// The label is supplied at emission and is not part of the handler signature.
     async fn publish(&self, topics: Vec<Topic>, message: String) -> Result<(), DeliveryError> {
         let label = Topics::from_topics(&topics);
-        self.emit_on_publish_tracked(label, Notification { topics, message })
+        self.events
+            .on_publish()
+            .labelled(label)
+            .tracked()
+            .emit(Notification { topics, message })
             .await
     }
 }
@@ -136,14 +140,14 @@ async fn main() -> Result<(), InvokeError> {
         events: Default::default(),
     })?;
 
-    bus.on_publish().connect_labelled(&orders, Topics::ORDERS);
-    bus.on_publish().connect_labelled(&billing, Topics::BILLING);
+    bus.on_publish().labelled(Topics::ORDERS).connect(&orders);
+    bus.on_publish().labelled(Topics::BILLING).connect(&billing);
     bus.on_publish()
-        .connect_labelled(&shipping, Topics::SHIPPING);
-    bus.on_publish().connect_labelled(
-        &orders_or_shipping,
-        Topics(Topics::ORDERS.0 | Topics::SHIPPING.0),
-    );
+        .labelled(Topics::SHIPPING)
+        .connect(&shipping);
+    bus.on_publish()
+        .labelled(Topics(Topics::ORDERS.0 | Topics::SHIPPING.0))
+        .connect(&orders_or_shipping);
     // An ordinary connection is a wildcard, including for an empty topic mask.
     bus.on_publish().connect(&observer);
 

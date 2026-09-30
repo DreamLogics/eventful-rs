@@ -27,7 +27,7 @@ impl Counter {
     /// Queue a notification.
     #[action]
     pub fn notify(&self) {
-        self.emit_changed(1);
+        self.events.changed().emit(1);
     }
 }
 

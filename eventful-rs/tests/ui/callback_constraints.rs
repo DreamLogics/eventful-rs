@@ -10,7 +10,7 @@ impl ListenerKind for Dialog {}
 #[eventful(shard = DynamicShard)]
 struct Other;
 fn wire(button: ShardRcHandle<Button>, dialog: ShardRcHandle<Dialog>, other: ShardRcHandle<Other>) {
-    button.clicked().connect_fn(&dialog, |_: &Dialog, _: String| {});
-    button.clicked().connect_fn(&other, |_, _| {});
+    button.clicked().with_receiver(&dialog).connect(|_: &Dialog, _: String| {});
+    button.clicked().with_receiver(&other).connect(|_, _| {});
 }
 fn main() {}

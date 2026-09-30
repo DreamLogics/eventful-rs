@@ -7,7 +7,7 @@ mod declarations {
         fn changed(&self, value: usize);
     }
 }
-use declarations::{UpdatesEmittersExt, UpdatesSignalsExt};
+use declarations::UpdatesSignalsExt;
 
 #[eventful(declarations::Updates, shard = DynamicShard)]
 struct GenericListener<T: AsRef<str> = String, const N: usize = 2>
@@ -46,7 +46,10 @@ fn generic_instances_deliver_events_across_shards() {
         .to_handle()
     });
     source.changed().connect(&target);
-    futures::executor::block_on(source.emit_changed_tracked(42)).unwrap();
+    futures::executor::block_on(source.deferred_upgrade_in_shard(async move |source| {
+        source.events.changed().tracked().emit(42).await
+    }))
+    .unwrap();
     let values = futures::executor::block_on(target.deferred_upgrade_in_shard(async |value| {
         assert_eq!(value.name.as_ref(), "target");
         *value.values.borrow()

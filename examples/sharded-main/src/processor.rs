@@ -41,7 +41,11 @@ impl Importer {
                 continue;
             }
             self.count.set(self.count.get() + 1);
-            self.emit_imported_tracked(name.to_owned()).await?;
+            self.events
+                .imported()
+                .tracked()
+                .emit(name.to_owned())
+                .await?;
             imported += 1;
         }
         Ok(imported)

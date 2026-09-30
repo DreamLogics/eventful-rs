@@ -172,6 +172,31 @@ impl ShardEventHandle {
             })
         }))
     }
+    /// Submit a receiver-free callback immediately and observe its completion.
+    /// Dropping the observer does not cancel accepted work.
+    ///
+    /// # Errors
+    /// Reports closed shards, callback panics, and canceled operations.
+    pub fn try_invoke_tracked<F>(
+        &self,
+        callback: F,
+    ) -> impl Future<Output = Result<(), InvokeError>> + Send + 'static + use<F>
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        let posted = self.post(Box::new(move |_| {
+            Box::pin(async move {
+                let result = std::panic::catch_unwind(AssertUnwindSafe(callback))
+                    .map_err(|_| InvokeError::Panicked);
+                let _ = tx.send(result);
+            })
+        }));
+        async move {
+            posted?;
+            rx.await.map_err(|_| InvokeError::Canceled)?
+        }
+    }
     /// Queue an async callback; its future is created and polled on the shard.
     ///
     /// # Errors

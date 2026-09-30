@@ -54,3 +54,7 @@ pub use registry::join_all_shards_async;
 pub(crate) use registry::register_shard;
 mod background;
 mod main_loop;
+
+#[doc(hidden)]
+#[path = "builders.rs"]
+pub mod __builders;

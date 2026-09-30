@@ -35,8 +35,10 @@ impl Device {
 
     /// Publish a sample device status and position.
     fn publish_status(&self) {
-        self.emit_connected(format!("Device online: {}", self.name));
-        self.emit_on_position(12.0, 34.0);
+        self.events
+            .connected()
+            .emit(format!("Device online: {}", self.name));
+        self.events.on_position().emit(12.0, 34.0);
     }
 }
 

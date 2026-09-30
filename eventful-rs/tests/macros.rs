@@ -9,7 +9,7 @@ mod declarations {
         fn changed(&self, value: usize);
     }
 }
-use declarations::{UpdatesEmittersExt, UpdatesSignalsExt};
+use declarations::UpdatesSignalsExt;
 
 #[eventful(declarations::Updates, shard = DynamicShard)]
 struct Counter {
@@ -29,7 +29,7 @@ impl Counter {
     #[asynced]
     async fn increment(&self, amount: usize) -> usize {
         *self.value.borrow_mut() += amount;
-        self.emit_changed(*self.value.borrow());
+        self.events.changed().emit(*self.value.borrow());
         *self.value.borrow()
     }
 }
@@ -88,19 +88,25 @@ fn generated_tracked_signals_observe_cross_shard_completion_and_closed_targets()
     let target = target_shard.bind(make_counter);
     source.changed().connect(&target);
     assert_eq!(
-        futures::executor::block_on(source.emit_changed_tracked(12)),
+        futures::executor::block_on(source.deferred_upgrade_in_shard(async move |source| {
+            source.events.changed().tracked().emit(12).await
+        })),
         Ok(())
     );
     assert_eq!(futures::executor::block_on(target.read()), 12);
     // Submission happens even if the completion future is dropped.
-    drop(source.changed().emit_tracked(23));
+    futures::executor::block_on(source.deferred_upgrade_in_shard(async |source| {
+        drop(source.events.changed().tracked().emit(23));
+    }));
     assert_eq!(futures::executor::block_on(target.read()), 23);
     target_shard.join().unwrap();
     assert_eq!(
-        futures::executor::block_on(source.changed().emit_tracked(99)),
+        futures::executor::block_on(source.deferred_upgrade_in_shard(async |source| {
+            source.events.changed().tracked().emit(99).await
+        })),
         Err(DeliveryError::Closed)
     );
-    source.changed().emit(99);
+    source.upgrade_in_shard(|source| source.events.changed().emit(99));
     source_shard.join().unwrap();
 }
 
@@ -144,10 +150,23 @@ mod concrete_event_arguments {
         let target = target_shard.bind(factory);
         source.some_event().connect(&target);
         source.nested().connect(&target);
-        futures::executor::block_on(source.emit_some_event_tracked(vec!["first".into()])).unwrap();
-        futures::executor::block_on(
-            source.emit_nested_tracked(Some(vec![Ok("second".into()), Err(1)])),
-        )
+        futures::executor::block_on(source.deferred_upgrade_in_shard(async move |source| {
+            source
+                .events
+                .some_event()
+                .tracked()
+                .emit(vec!["first".into()])
+                .await
+        }))
+        .unwrap();
+        futures::executor::block_on(source.deferred_upgrade_in_shard(async move |source| {
+            source
+                .events
+                .nested()
+                .tracked()
+                .emit(Some(vec![Ok("second".into()), Err(1)]))
+                .await
+        }))
         .unwrap();
         let values = futures::executor::block_on(
             target.deferred_upgrade_in_shard(async |value| value.values.borrow().clone()),

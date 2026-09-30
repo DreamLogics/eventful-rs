@@ -150,7 +150,7 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
     .unwrap();
     // A plain connection token may be dropped; the source owns the connection.
     drop(source.connect_to(&listener));
-    source.emit_changed(1);
+    source.events.changed().emit(1);
     assert!(listener.received.borrow().is_empty()); // Delivery is queued.
     let (done, result) = futures::channel::oneshot::channel();
     std::thread::spawn(move || {
@@ -164,10 +164,10 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
     .join()
     .unwrap();
     slint::spawn_local(async move {
-        source.emit_changed_tracked(2).await.unwrap();
+        source.events.changed().tracked().emit(2).await.unwrap();
         assert_eq!(*listener.received.borrow(), [1, 2]);
-        source.emit_changed(3);
-        source.emit_changed_tracked(4).await.unwrap();
+        source.events.changed().emit(3);
+        source.events.changed().tracked().emit(4).await.unwrap();
         assert_eq!(*listener.received.borrow(), [1, 2, 3, 4]);
         // Generated Slint callbacks forward to a wrapper on the same UI shard.
         let ui = BridgeTestUi::new().unwrap();
@@ -184,7 +184,12 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
         window.ui.invoke_edit_paragraph("paragraph".into(), 7);
         assert!(window.calls.borrow().is_empty());
         // A tracked event on the same receiver observes the preceding queued calls.
-        window.bridge.emit_save_tracked().await.unwrap();
+        window.ui.invoke_save();
+        Ui::shard()
+            .handle()
+            .try_invoke_tracked(|| {})
+            .await
+            .unwrap();
         assert_eq!(*window.calls.borrow(), ["save", "paragraph:7", "save"]);
 
         // Reinstalling replaces the callbacks. Dropping the old bridge must not
@@ -197,12 +202,22 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
         new_bridge.connect_to(&window);
         drop(old_bridge);
         ui.invoke_save();
-        new_bridge.emit_save_tracked().await.unwrap();
+        ui.invoke_save();
+        Ui::shard()
+            .handle()
+            .try_invoke_tracked(|| {})
+            .await
+            .unwrap();
         assert_eq!(window.calls.borrow().len(), 5);
         let retained_new_events = new_bridge.events().clone();
         drop(new_bridge);
         ui.invoke_save(); // Neither retained event set keeps forwarding alive.
-        window.bridge.emit_save_tracked().await.unwrap();
+        window.ui.invoke_save();
+        Ui::shard()
+            .handle()
+            .try_invoke_tracked(|| {})
+            .await
+            .unwrap();
         assert_eq!(window.calls.borrow().len(), 6);
         drop((retained_events, retained_new_events));
 

@@ -13,7 +13,7 @@ mod events;
 mod slint_events;
 
 /// Define a typed event interface with synchronous `&self` methods.
-/// Generated signal-access and emitter extension traits inherit the interface
+/// Generated signal-access extension traits and emission sets inherit the interface
 /// visibility, so private interfaces can use private payload types.
 ///
 /// Concrete argument types such as `Vec<String>` and `Option<Vec<String>>` are
@@ -25,9 +25,9 @@ mod slint_events;
 /// emissions return a future that observes completion and delivery errors.
 ///
 /// Mark individual methods with `#[with_label(LabelType)]` to enable routing.
-/// The type must implement `eventful_rs::EventLabel`. Generated emitters take
-/// the label first, followed by the declared arguments; handler signatures stay
-/// unchanged. `signal.connect_labelled(&listener, subscription)` delivers only
+/// The type must implement `eventful_rs::EventLabel`. Emission builders select
+/// labels with `.labelled(label)`; handler signatures stay unchanged.
+/// `signal.labelled(subscription).connect(&listener)` delivers only
 /// when `subscription.matches(&emitted)` returns true. Ordinary `connect` and
 /// bulk connections subscribe to every label. Matching occurs on the emitting
 /// thread before cloning arguments or submitting work to the receiver's shard.

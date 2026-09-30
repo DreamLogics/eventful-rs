@@ -30,9 +30,23 @@ impl Updates for Listener {
     }
 }
 fn emit(source: &ShardRcHandle<Source>) {
-    block_on(source.emit_names_tracked(vec!["name".into()])).unwrap();
-    block_on(source.emit_count_tracked(7)).unwrap();
-    block_on(source.emit_finished_tracked()).unwrap();
+    block_on(source.deferred_upgrade_in_shard(async move |source| {
+        source
+            .events
+            .names()
+            .tracked()
+            .emit(vec!["name".into()])
+            .await
+    }))
+    .unwrap();
+    block_on(source.deferred_upgrade_in_shard(async move |source| {
+        source.events.count().tracked().emit(7).await
+    }))
+    .unwrap();
+    block_on(source.deferred_upgrade_in_shard(async move |source| {
+        source.events.finished().tracked().emit().await
+    }))
+    .unwrap();
 }
 
 #[test]
@@ -62,9 +76,10 @@ fn bulk_connections_deliver_and_disconnect_through_local_strong_and_weak_sources
     log.lock().unwrap().clear();
     group.clone().disconnect();
     group.disconnect(); // Stale clones are harmless and leave individual subscriptions intact.
-    source.emit_names(vec!["ignored".into()]);
-    source.emit_count(8);
-    source.emit_finished();
+    source.upgrade_in_shard(move |source| source.events.names().emit(vec!["ignored".into()]));
+    source.upgrade_in_shard(move |source| source.events.count().emit(8));
+    source.upgrade_in_shard(move |source| source.events.finished().emit());
+    block_on(source.deferred_upgrade_in_shard(async |_| ()));
     block_on(target.deferred_upgrade_in_shard(async |_| ()));
     assert_eq!(*log.lock().unwrap(), ["8"]);
     retained.disconnect();
@@ -129,7 +144,9 @@ fn groups_do_not_keep_targets_alive() {
     b.join().unwrap();
     assert!(weak_events.upgrade().is_none());
     assert_eq!(
-        block_on(source.emit_finished_tracked()),
+        block_on(source.deferred_upgrade_in_shard(async move |source| {
+            source.events.finished().tracked().emit().await
+        })),
         Err(DeliveryError::Closed)
     );
     group.disconnect();

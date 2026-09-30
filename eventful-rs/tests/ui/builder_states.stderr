@@ -1,0 +1,117 @@
+error[E0599]: no method named `emit` found for struct `UpdatesPlainSignal<L, D, R>` in the current scope
+  --> tests/ui/builder_states.rs:13:20
+   |
+ 4 | #[events]
+   | --------- method `emit` not found for this struct
+...
+13 |     handle.plain().emit(1);
+   |                    ^^^^ method not found in `UpdatesPlainSignal`
+
+error[E0599]: no method named `emit` found for struct `UpdatesPlainSignal<L, D, R>` in the current scope
+  --> tests/ui/builder_states.rs:14:29
+   |
+ 4 | #[events]
+   | --------- method `emit` not found for this struct
+...
+14 |     handle.events().plain().emit(1);
+   |                             ^^^^ method not found in `UpdatesPlainSignal`
+
+error[E0599]: no method named `emit` found for struct `UpdatesChangedSignalEmission<'_>` in the current scope
+  --> tests/ui/builder_states.rs:15:29
+   |
+ 4 | #[events]
+   | --------- method `emit` not found for this struct
+...
+15 |     source.events.changed().emit(1);
+   |                             ^^^^ method not found in `UpdatesChangedSignalEmission<'_>`
+   |
+   = note: the method was found for
+           - `UpdatesChangedSignalEmission<'_, Selected<Label>, Tracked>`
+           - `UpdatesChangedSignalEmission<'_, Selected<Label>>`
+
+error[E0599]: no method named `labelled` found for struct `UpdatesPlainSignalEmission<'a, L, M>` in the current scope
+  --> tests/ui/builder_states.rs:16:27
+   |
+ 4 | #[events]
+   | --------- method `labelled` not found for this struct
+...
+16 |     source.events.plain().labelled(Label);
+   |                           ^^^^^^^^ method not found in `UpdatesPlainSignalEmission<'_>`
+
+error[E0599]: no method named `connect` found for struct `UpdatesPlainSignalEmission<'a, L, M>` in the current scope
+  --> tests/ui/builder_states.rs:17:37
+   |
+ 4 | #[events]
+   | --------- method `connect` not found for this struct
+...
+17 |     source.events.plain().tracked().connect(|_| {});
+   |                                     ^^^^^^^ method not found in `UpdatesPlainSignalEmission<'_, Selected<()>, Tracked>`
+
+error[E0599]: no method named `emit` found for struct `UpdatesPlainSignal<L, D, R>` in the current scope
+  --> tests/ui/builder_states.rs:18:36
+   |
+ 4 | #[events]
+   | --------- method `emit` not found for this struct
+...
+18 |     handle.plain().on_shard(shard).emit(1);
+   |                                    ^^^^ method not found in `UpdatesPlainSignal<All, eventful_rs::ShardEventHandle>`
+
+error[E0599]: no method named `on_shard` found for struct `UpdatesPlainSignal<All, eventful_rs::ShardEventHandle>` in the current scope
+  --> tests/ui/builder_states.rs:19:36
+   |
+ 4 | #[events]
+   | --------- method `on_shard` not found for this struct
+...
+19 |     handle.plain().on_shard(shard).on_shard(shard);
+   |                                    ^^^^^^^^ method not found in `UpdatesPlainSignal<All, eventful_rs::ShardEventHandle>`
+   |
+   = note: the method was found for
+           - `UpdatesPlainSignal<L>`
+
+error[E0599]: no method named `labelled` found for struct `UpdatesChangedSignal<Selected<Label>>` in the current scope
+  --> tests/ui/builder_states.rs:20:38
+   |
+ 4 | #[events]
+   | --------- method `labelled` not found for this struct
+...
+20 |     handle.changed().labelled(Label).labelled(Label);
+   |                                      ^^^^^^^^ method not found in `UpdatesChangedSignal<Selected<Label>>`
+   |
+   = note: the method was found for
+           - `UpdatesChangedSignal<All, D, R>`
+
+error[E0599]: no method named `on_shard` found for struct `UpdatesPlainSignal<All, ShardWeakHandle<Source>>` in the current scope
+  --> tests/ui/builder_states.rs:21:42
+   |
+ 4 | #[events]
+   | --------- method `on_shard` not found for this struct
+...
+21 |     handle.plain().with_receiver(handle).on_shard(shard);
+   |                                          ^^^^^^^^ method not found in `UpdatesPlainSignal<All, ShardWeakHandle<Source>>`
+   |
+   = note: the method was found for
+           - `UpdatesPlainSignal<L>`
+
+error[E0599]: no method named `role` found for struct `UpdatesPlainSignal<All, eventful_rs::ShardEventHandle>` in the current scope
+  --> tests/ui/builder_states.rs:22:36
+   |
+ 4 | #[events]
+   | --------- method `role` not found for this struct
+...
+22 |     handle.plain().on_shard(shard).role::<()>();
+   |     ------ -------                 ^^^^ private field, not a method
+   |     |      |
+   |     |      method `role` is available on `UpdatesPlainSignal`
+   |     method `role` is available on `&eventful_rs::ShardRcHandle<Source>`
+
+error[E0599]: no method named `tracked` found for struct `UpdatesPlainSignalEmission<'_, Selected<()>, Tracked>` in the current scope
+  --> tests/ui/builder_states.rs:23:37
+   |
+ 4 | #[events]
+   | --------- method `tracked` not found for this struct
+...
+23 |     source.events.plain().tracked().tracked();
+   |                                     ^^^^^^^ method not found in `UpdatesPlainSignalEmission<'_, Selected<()>, Tracked>`
+   |
+   = note: the method was found for
+           - `UpdatesPlainSignalEmission<'a, L>`

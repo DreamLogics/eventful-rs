@@ -558,12 +558,17 @@ where
         group
     }
 
+    /// Select a role for source-owned connections to every event.
+    pub fn role<Role>(this: &Self) -> RoleConnections<'_, Self, Role> {
+        RoleConnections {
+            source: this,
+            role: std::marker::PhantomData,
+        }
+    }
+
     /// Connect all signals with a receiver role; the local source owns cleanup.
     /// Dropping the returned token leaves connections active until source destruction.
-    pub fn connect_as<Role: 'static, U>(
-        this: &Self,
-        target: &impl Sharded<U>,
-    ) -> crate::ConnectionGroup
+    fn connect_as<Role: 'static, U>(this: &Self, target: &impl Sharded<U>) -> crate::ConnectionGroup
     where
         U: Eventful + HasEvents<U::EventSetType> + 'static,
         T::EventSetType: crate::ConnectEventsAs<U, Role>,
@@ -604,9 +609,17 @@ where
         crate::ConnectEvents::connect_events(&*self.events, target)
     }
 
+    /// Select a receiver role for every event in this source.
+    pub fn role<Role>(&self) -> RoleConnections<'_, Self, Role> {
+        RoleConnections {
+            source: self,
+            role: std::marker::PhantomData,
+        }
+    }
+
     /// Connect all signals with a receiver role, holding the receiver weakly.
     /// Use disconnect() or scoped() for cleanup; dropping the token leaves it active.
-    pub fn connect_as<Role: 'static, U>(&self, target: &impl Sharded<U>) -> crate::ConnectionGroup
+    fn connect_as<Role: 'static, U>(&self, target: &impl Sharded<U>) -> crate::ConnectionGroup
     where
         U: Eventful + HasEvents<U::EventSetType> + 'static,
         T::EventSetType: crate::ConnectEventsAs<U, Role>,
@@ -631,9 +644,17 @@ where
         Some(crate::ConnectEvents::connect_events(&*events, target))
     }
 
+    /// Select a receiver role, resolving weak event storage when connected.
+    pub fn role<Role>(&self) -> RoleConnections<'_, Self, Role> {
+        RoleConnections {
+            source: self,
+            role: std::marker::PhantomData,
+        }
+    }
+
     /// Connect all signals with a receiver role if the source event set still exists.
     /// Returns None for an expired source; the receiver is held weakly.
-    pub fn connect_as<Role: 'static, U>(
+    fn connect_as<Role: 'static, U>(
         &self,
         target: &impl Sharded<U>,
     ) -> Option<crate::ConnectionGroup>
@@ -684,5 +705,58 @@ where
             .field("id", &self.id)
             .field("shard", &self.shard_handle.shard_id())
             .finish_non_exhaustive()
+    }
+}
+
+/// Receiver-role adapter for a whole source interface.
+#[must_use = "call connect to register the subscriptions"]
+pub struct RoleConnections<'a, S, Role> {
+    /// Source whose lifetime and storage rules govern these connections.
+    source: &'a S,
+    /// The role carries no runtime value.
+    role: std::marker::PhantomData<fn() -> Role>,
+}
+impl<S, Role> std::fmt::Debug for RoleConnections<'_, S, Role> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RoleConnections").finish_non_exhaustive()
+    }
+}
+impl<T, Role: 'static> RoleConnections<'_, ShardRc<T>, Role>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Connect every event using the selected role and the source's ownership rules.
+    pub fn connect<U>(self, target: &impl Sharded<U>) -> crate::ConnectionGroup
+    where
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
+        T::EventSetType: crate::ConnectEventsAs<U, Role>,
+    {
+        ShardRc::connect_as::<Role, U>(self.source, target)
+    }
+}
+impl<T, Role: 'static> RoleConnections<'_, ShardRcHandle<T>, Role>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Connect every event using the selected role and the source's ownership rules.
+    pub fn connect<U>(self, target: &impl Sharded<U>) -> crate::ConnectionGroup
+    where
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
+        T::EventSetType: crate::ConnectEventsAs<U, Role>,
+    {
+        self.source.connect_as::<Role, U>(target)
+    }
+}
+impl<T, Role: 'static> RoleConnections<'_, ShardWeakHandle<T>, Role>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Connect every event using the selected role and the source's ownership rules.
+    pub fn connect<U>(self, target: &impl Sharded<U>) -> Option<crate::ConnectionGroup>
+    where
+        U: Eventful + HasEvents<U::EventSetType> + 'static,
+        T::EventSetType: crate::ConnectEventsAs<U, Role>,
+    {
+        self.source.connect_as::<Role, U>(target)
     }
 }

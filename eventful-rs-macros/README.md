@@ -12,6 +12,13 @@ created by `use_shard!(shard = Marker);` in the current module. A missing
 `#[sharded_main(Main)]` drives an explicitly declared main-thread marker; declaration
 uses the runtime crate's `declare_shard!` macro. It does not select a scope default.
 
+Declare `#[events]` interfaces at module scope. Generated implementation details
+live in a private module; public signal builders, emission sets, and signal
+extension traits retain the interface visibility. Source methods emit through
+`self.events.changed().tracked().emit(value)`. Handles expose subscription-only
+builders, including `.labelled(label).on_shard(&handle).connect(callback)`.
+There is no emitter extension trait.
+
 `#[events]` also implements `ConnectEvents<Listener>` for its generated event set,
 enabling `source.connect_to(&listener)` on shard references and handles. Bulk connections
 use the same weak targets, delivery paths, and listener bounds as individual signals.

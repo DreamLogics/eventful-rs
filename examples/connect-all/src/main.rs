@@ -25,9 +25,9 @@ impl Producer {
     async fn produce(&self, names: Vec<String>) -> Result<(), DeliveryError> {
         let count = names.len();
         for name in names {
-            self.emit_item_tracked(name).await?;
+            self.events.item().tracked().emit(name).await?;
         }
-        self.emit_finished_tracked(count).await
+        self.events.finished().tracked().emit(count).await
     }
 }
 

@@ -165,21 +165,49 @@ fn generated_labels_work_across_shards_with_bulk_connections_and_closed_targets(
     };
     let source = source_shard.bind(make);
     let target = target_shard.bind(make);
-    let connection = source.changed().connect_labelled(&target, Mask(3));
-    source.ping().connect_labelled(&target, Mask(1));
-    source.changed().emit(Mask(4), 999, 999); // Rejected.
-    source.changed().emit(Mask(1), 1, 2);
-    block_on(source.changed().emit_tracked(Mask(2), 3, 4)).unwrap();
+    let connection = source.changed().labelled(Mask(3)).connect(&target);
+    source.ping().labelled(Mask(1)).connect(&target);
+    source.upgrade_in_shard(move |value| value.events.changed().labelled(Mask(4)).emit(999, 999)); // Rejected.
+    source.upgrade_in_shard(move |value| value.events.changed().labelled(Mask(1)).emit(1, 2));
+    block_on(source.deferred_upgrade_in_shard(async move |value| {
+        value
+            .events
+            .changed()
+            .labelled(Mask(2))
+            .tracked()
+            .emit(3, 4)
+            .await
+    }))
+    .unwrap();
     let emit_source = source.clone();
     block_on(
         source
             .downgrade()
             .try_deferred_upgrade_in_shard(async move |value| {
-                value.emit_changed_tracked(Mask(1), 5, 6).await.unwrap();
-                value.emit_ping(Mask(1));
-                value.emit_ping_tracked(Mask(4)).await.unwrap();
-                // Labels also work through signal access on a handle.
-                emit_source.ping().emit_tracked(Mask(1)).await.unwrap();
+                value
+                    .events
+                    .changed()
+                    .labelled(Mask(1))
+                    .tracked()
+                    .emit(5, 6)
+                    .await
+                    .unwrap();
+                value.events.ping().labelled(Mask(1)).emit();
+                value
+                    .events
+                    .ping()
+                    .labelled(Mask(4))
+                    .tracked()
+                    .emit()
+                    .await
+                    .unwrap();
+                // Remote callers dispatch onto the source before emitting.
+                emit_source
+                    .deferred_upgrade_in_shard(async move |value| {
+                        value.events.ping().labelled(Mask(1)).tracked().emit().await
+                    })
+                    .await
+                    .unwrap();
             }),
     )
     .unwrap();
@@ -194,8 +222,20 @@ fn generated_labels_work_across_shards_with_bulk_connections_and_closed_targets(
 
     connection.disconnect();
     let group = source.events().connect_events(&target);
-    block_on(source.changed().emit_tracked(Mask(0), 1, 0)).unwrap();
-    block_on(source.ordinary().emit_tracked()).unwrap();
+    block_on(source.deferred_upgrade_in_shard(async move |value| {
+        value
+            .events
+            .changed()
+            .labelled(Mask(0))
+            .tracked()
+            .emit(1, 0)
+            .await
+    }))
+    .unwrap();
+    block_on(source.deferred_upgrade_in_shard(async move |value| {
+        value.events.ordinary().tracked().emit().await
+    }))
+    .unwrap();
     assert_eq!(
         block_on(
             target
@@ -207,9 +247,16 @@ fn generated_labels_work_across_shards_with_bulk_connections_and_closed_targets(
     group.disconnect();
     target_shard.join().unwrap();
     // Rejection requires no live destination; an accepted emission reports closure.
-    assert_eq!(block_on(source.ping().emit_tracked(Mask(2))), Ok(()));
     assert_eq!(
-        block_on(source.ping().emit_tracked(Mask(1))),
+        block_on(source.deferred_upgrade_in_shard(async move |value| {
+            value.events.ping().labelled(Mask(2)).tracked().emit().await
+        })),
+        Ok(())
+    );
+    assert_eq!(
+        block_on(source.deferred_upgrade_in_shard(async move |value| {
+            value.events.ping().labelled(Mask(1)).tracked().emit().await
+        })),
         Err(DeliveryError::Closed)
     );
     source_shard.join().unwrap();

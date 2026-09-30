@@ -9,8 +9,8 @@ struct Button;
 struct Dialog;
 impl Buttons<A> for Dialog { fn clicked(&self) {} }
 fn wire(button: ShardRcHandle<Button>, dialog: ShardRcHandle<Dialog>) {
-    button.clicked().connect_as::<B, _>(&dialog);
-    button.connect_as::<B, _>(&dialog);
+    button.clicked().role::<B>().connect(&dialog);
+    button.role::<B>().connect(&dialog);
     button.clicked().connect(&dialog);
 }
 fn main() {}

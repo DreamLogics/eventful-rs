@@ -1,10 +1,8 @@
 error[E0277]: the trait bound `Dialog: Buttons<B>` is not satisfied
-  --> tests/ui/receiver_role_missing.rs:12:38
+  --> tests/ui/receiver_role_missing.rs:12:34
    |
-12 |     button.clicked().connect_as::<B, _>(&dialog);
-   |                      ----------      ^ unsatisfied trait bound
-   |                      |
-   |                      required by a bound introduced by this call
+12 |     button.clicked().role::<B>().connect(&dialog);
+   |                                  ^^^^^^^ unsatisfied trait bound
    |
 help: the trait `Buttons<B>` is not implemented for `Dialog`
       but trait `Buttons<A>` is implemented for it
@@ -13,18 +11,18 @@ help: the trait `Buttons<B>` is not implemented for `Dialog`
 10 | impl Buttons<A> for Dialog { fn clicked(&self) {} }
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: for that trait implementation, expected `A`, found `B`
-note: required by a bound in `ButtonsClickedSignal::connect_as`
+note: required by a bound in `ButtonsClickedSignal::<L, Unselected, R>::connect`
   --> tests/ui/receiver_role_missing.rs:4:1
    |
  4 | #[events]
-   | ^^^^^^^^^ required by this bound in `ButtonsClickedSignal::connect_as`
+   | ^^^^^^^^^ required by this bound in `ButtonsClickedSignal::<L, Unselected, R>::connect`
    = note: this error originates in the attribute macro `events` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `Dialog: Buttons<B>` is not satisfied
-  --> tests/ui/receiver_role_missing.rs:13:12
+  --> tests/ui/receiver_role_missing.rs:13:24
    |
-13 |     button.connect_as::<B, _>(&dialog);
-   |            ^^^^^^^^^^ unsatisfied trait bound
+13 |     button.role::<B>().connect(&dialog);
+   |                        ^^^^^^^ unsatisfied trait bound
    |
 help: the trait `Buttons<B>` is not implemented for `Dialog`
       but trait `Buttons<A>` is implemented for it
@@ -33,21 +31,21 @@ help: the trait `Buttons<B>` is not implemented for `Dialog`
 10 | impl Buttons<A> for Dialog { fn clicked(&self) {} }
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: for that trait implementation, expected `A`, found `B`
-note: required for `ButtonsEventSet` to implement `eventful_rs::ConnectEventsAs<Dialog, B>`
+note: required for `ButtonsEventSet` to implement `ConnectEventsAs<Dialog, B>`
   --> tests/ui/receiver_role_missing.rs:4:1
    |
  4 | #[events]
    | ^^^^^^^^^ unsatisfied trait bound introduced here
  5 | trait Buttons { fn clicked(&self); }
    |       ^^^^^^^
-note: required by a bound in `eventful_rs::ShardRcHandle::<T>::connect_as`
+note: required by a bound in `RoleConnections::<'_, eventful_rs::ShardRcHandle<T>, Role>::connect`
   --> src/shard_handle.rs
    |
-   |     pub fn connect_as<Role: 'static, U>(&self, target: &impl Sharded<U>) -> crate::ConnectionGroup
-   |            ---------- required by a bound in this associated function
+   |     pub fn connect<U>(self, target: &impl Sharded<U>) -> crate::ConnectionGroup
+   |            ------- required by a bound in this associated function
 ...
    |         T::EventSetType: crate::ConnectEventsAs<U, Role>,
-   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `ShardRcHandle::<T>::connect_as`
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RoleConnections::<'_, ShardRcHandle<T>, Role>::connect`
    = note: this error originates in the attribute macro `events` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `Dialog: Buttons` is not satisfied
@@ -63,10 +61,9 @@ help: the trait `Buttons<()>` is not implemented for `Dialog`
 10 | impl Buttons<A> for Dialog { fn clicked(&self) {} }
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: for that trait implementation, expected `A`, found `()`
-note: required by a bound in `ButtonsClickedSignal::connect`
-  --> tests/ui/receiver_role_missing.rs:5:7
+note: required by a bound in `ButtonsClickedSignal::<L, Unselected, R>::connect`
+  --> tests/ui/receiver_role_missing.rs:4:1
    |
  4 | #[events]
-   | --------- required by a bound in this associated function
- 5 | trait Buttons { fn clicked(&self); }
-   |       ^^^^^^^ required by this bound in `ButtonsClickedSignal::connect`
+   | ^^^^^^^^^ required by this bound in `ButtonsClickedSignal::<L, Unselected, R>::connect`
+   = note: this error originates in the attribute macro `events` (in Nightly builds, run with -Z macro-backtrace for more info)

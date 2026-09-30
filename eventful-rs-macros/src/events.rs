@@ -3,15 +3,15 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{FnArg, ItemTrait, Pat, TraitItem, Type, parse_macro_input};
 
-use crate::{fresh_target, pascal};
+use crate::pascal;
 /// Define a typed event interface with synchronous `&self` methods.
-/// Generated signal-access and emitter extension traits inherit the interface
+/// Generated signal-access extension traits and emission sets inherit the interface
 /// visibility, so private interfaces can use private payload types.
 ///
 /// Concrete argument types such as `Vec<String>` and `Option<Vec<String>>` are
 /// supported. User-declared generic parameters are not supported. The macro adds
 /// a defaulted receiver-role parameter: `Interface<Role = ()>`. Select a role with
-/// `signal.connect_as::<Role, _>(&listener)`, or use `connect_fn` with a method or
+/// `signal.role::<Role>().connect(&listener)`, or use `with_receiver(...).connect(...)` with a method or
 /// `Fn(&Listener, Args...) + Send + Sync + 'static` callback. Both dispatch on the
 /// listener's shard and hold it weakly. Optional `#[events(ExtraTrait)]` receiver
 /// bounds also apply to callbacks. Ordinary `connect` selects the default `()` role.
@@ -22,9 +22,9 @@ use crate::{fresh_target, pascal};
 /// emissions return a future that observes completion and delivery errors.
 ///
 /// Mark individual methods with `#[with_label(LabelType)]` to enable routing.
-/// The type must implement `eventful_rs::EventLabel`. Generated emitters take
-/// the label first, followed by the declared arguments; handler signatures stay
-/// unchanged. `signal.connect_labelled(&listener, subscription)` delivers only
+/// The type must implement `eventful_rs::EventLabel`. Emission builders select
+/// labels with `.labelled(label)`; handler signatures stay unchanged.
+/// `signal.labelled(subscription).connect(&listener)` delivers only
 /// when `subscription.matches(&emitted)` returns true. Ordinary `connect` and
 /// bulk connections subscribe to every label. Matching occurs on the emitting
 /// thread before cloning arguments or submitting work to the receiver's shard.
@@ -113,7 +113,6 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
     let visibility = &trait_item.vis;
     let set_name = format_ident!("{}EventSet", trait_name);
     let ext_signals_name = format_ident!("{}SignalsExt", trait_name);
-    let ext_emitter_name = format_ident!("{}EmittersExt", trait_name);
 
     // Reserve a parameter name absent from the declaration, including payload paths.
     let mut role = format_ident!("__EventfulRole");
@@ -128,10 +127,6 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         .params
         .push(syn::parse_quote!(#role = ()));
     let extra_bound = event_trait.as_ref().map(|path| quote!(+ #path));
-    let callback_bound = quote! {
-        #runtime::Eventful + #runtime::HasEvents<T::EventSetType>
-            #extra_bound + Sized + 'static
-    };
 
     let methods = trait_item
         .items
@@ -191,316 +186,272 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     let bulk_cfg = quote!(#[cfg(any(#(#enabled),*))]);
 
-    let mut signal_defs = Vec::new();
-    let mut set_fields = Vec::new();
-    let mut extension_signal_methods = Vec::new();
-    let mut extension_emitter_methods = Vec::new();
+    let module = format_ident!("__eventful_{}", trait_name);
+    let connections = format_ident!("{}Connections", trait_name);
+    let emissions = format_ident!("{}Emissions", trait_name);
+    let receiver_bound = format_ident!("__{}Receiver", trait_name);
+    let mut aliases = Vec::new();
+    let mut definitions = Vec::new();
+    let exports = vec![
+        quote!(#set_name),
+        quote!(#emissions),
+        quote!(#ext_signals_name),
+        quote!(#connections),
+    ];
+    let mut fields = Vec::new();
+    let mut defaults = Vec::new();
+    let mut signal_accessors = Vec::new();
+    let mut emission_accessors = Vec::new();
+    let mut extension_accessors = Vec::new();
+    let mut bulk_calls = Vec::new();
 
-    for ((method_name, signal_name, arg_names, arg_types, cfg), label) in
-        methods.iter().zip(&labels)
-    {
-        let target_ident = fresh_target(arg_names);
-        let dispatch_args = (0..arg_names.len())
-            .map(|index| format_ident!("__eventful_arg_{}", index))
+    for ((method, signal, names, types, cfg), label) in methods.iter().zip(&labels) {
+        let emitter = format_ident!("{}Emission", signal);
+        let label_alias = format_ident!("__{}Label", signal);
+        let types = types
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| {
+                let alias = format_ident!("__{}Arg{}", signal, i);
+                aliases.push(quote! {
+                    #(#item_cfg)* #(#cfg)* #[doc(hidden)] #[allow(non_camel_case_types)]
+                    #visibility type #alias = #ty;
+                });
+                alias
+            })
             .collect::<Vec<_>>();
-        let plain_name = method_name.to_string();
-        let plain_name = plain_name.strip_prefix("r#").unwrap_or(&plain_name);
-        let emit_tracked_name = format_ident!("emit_{}_tracked", plain_name);
-        let emit_name = format_ident!("emit_{}", plain_name);
-
-        let trait_bound = quote!(#callback_bound + #trait_name);
-        let role_bound = quote!(#callback_bound + #trait_name<#role>);
-        let label_type = label.as_ref().map(|ty| quote!(#ty)).unwrap_or(quote!(()));
-        let mut reserved = arg_names.clone();
-        reserved.push(target_ident.clone());
-        let label_ident = fresh_target(&reserved);
-        let label_param = label.as_ref().map(|ty| quote!(#label_ident: #ty,));
-        let label_arg = label.as_ref().map(|_| quote!(#label_ident,));
-        let dispatch_label = if label.is_some() {
-            quote!(#label_ident)
+        let label_ty = label.as_ref().map(|l| quote!(#l)).unwrap_or(quote!(()));
+        aliases.push(quote! {
+            #(#item_cfg)* #(#cfg)* #[doc(hidden)] #[allow(non_camel_case_types)]
+            #visibility type #label_alias = #label_ty;
+        });
+        let dispatch_args = (0..names.len())
+            .map(|i| format_ident!("__eventful_arg_{}", i))
+            .collect::<Vec<_>>();
+        let args = quote!((#(#types,)*));
+        let bounds = quote!(#(#types: Clone + Send + 'static,)*);
+        let state = quote!(#runtime::__builders);
+        let initial_label = if label.is_some() {
+            quote!(#state::All)
         } else {
-            quote!(())
+            quote!(#state::Selected<()>)
         };
-        let labelled_connect = label.as_ref().map(|ty| {
-            quote! {
-                /// Subscribe using `subscription.matches(&emitted)` before queuing delivery.
-                /// The receiver is held weakly. Dropping the connection keeps it active;
-                /// use `disconnect` or `scoped` to remove the subscription.
-                pub fn connect_labelled<T, S>(&self, target: &S, label: #ty)
-                    -> #runtime::Connection<(#(#arg_types,)*), #ty>
-                where
-                    T: #trait_bound,
-                    S: #runtime::Sharded<T>,
-                    #(#arg_types: Clone + Send + 'static,)*
-                {
-                    self.connect_labelled_as::<(), T>(target, label)
+        let initial_value = if label.is_some() {
+            quote!(#state::All)
+        } else {
+            quote!(#state::Selected(()))
+        };
+        let selected_label = label.as_ref().map(|_| quote! {
+            #(#cfg)*
+            impl<D, R> #signal<#state::All, D, R> {
+                /// Match emitted labels before scheduling this subscription.
+                pub fn labelled(self, label: #label_alias) -> #signal<#state::Selected<#label_alias>, D, R> {
+                    #signal { inner: self.inner, label: #state::Selected(label), destination: self.destination, role: self.role }
                 }
-
-                /// Subscribe to matching labels using the selected receiver role.
-                pub fn connect_labelled_as<#role: 'static, T>(
-                    &self, target: &impl #runtime::Sharded<T>, label: #ty,
-                ) -> #runtime::Connection<(#(#arg_types,)*), #ty>
-                where
-                    T: #role_bound,
-                    #(#arg_types: Clone + Send + 'static,)*
-                {
-                    self.connect_labelled_fn(target, label, <T as #trait_name<#role>>::#method_name)
-                }
-
-                /// Subscribe a callback to matching labels on the receiver's shard.
-                pub fn connect_labelled_fn<T>(
-                    &self, target: &impl #runtime::Sharded<T>, label: #ty,
-                    callback: impl Fn(&T, #(#arg_types),*) + Send + Sync + 'static,
-                ) -> #runtime::Connection<(#(#arg_types,)*), #ty>
-                where
-                    T: #callback_bound,
-                    #(#arg_types: Clone + Send + 'static,)*
-                {
-                    self.connect_callback(target, Some(label), callback)
+            }
+            #(#cfg)*
+            impl<'a, M> #emitter<'a, #state::All, M> {
+                /// Select the emitted routing label.
+                pub fn labelled(self, label: #label_alias) -> #emitter<'a, #state::Selected<#label_alias>, M> {
+                    #emitter { inner: self.inner, label: #state::Selected(label), mode: self.mode }
                 }
             }
         });
-        signal_defs.push(quote! {
-            /// Typed signal with weak listener connections and optional routing labels.
-            #(#item_cfg)*
+        aliases.push(quote! { #(#item_cfg)* #(#cfg)* #[allow(unused_imports)] #visibility use #module::{#signal, #emitter}; });
+        fields.push(quote!(#(#cfg)* #method: #runtime::Event<#args, #label_alias>));
+        defaults.push(quote!(#(#cfg)* #method: Default::default()));
+        signal_accessors.push(quote! {
             #(#cfg)*
-            #[derive(Debug)]
-            #visibility struct #signal_name {
-                inner: #runtime::Event<(#(#arg_types,)*), #label_type>,
+            /// Select this signal for subscription.
+            pub fn #method(&self) -> #signal {
+                #signal { inner: self.#method.clone(), label: #state::All, destination: #state::Unselected, role: #state::NoRole }
             }
-
-            #(#item_cfg)*
+        });
+        emission_accessors.push(quote! {
             #(#cfg)*
-            impl ::core::default::Default for #signal_name {
-                fn default() -> Self {
-                    Self { inner: #runtime::Event::default() }
+            /// Build an emission of this event.
+            pub fn #method(&self) -> #emitter<'_, #initial_label> {
+                #emitter { inner: &self.signals.#method, label: #initial_value, mode: #state::Untracked }
+            }
+        });
+        extension_accessors.push(quote! {
+            #(#cfg)*
+            /// Select this signal for subscription.
+            fn #method(&self) -> #signal { self.events().#method() }
+        });
+        bulk_calls
+            .push(quote! { #(#cfg)* group.push(self.#method().role::<#role>().connect(target)); });
+        definitions.push(quote! {
+            #(#cfg)*
+            /// Subscription builder. Configuration is consumed when connected.
+            #[must_use = "call connect to register the subscription"]
+            pub struct #signal<L = #state::All, D = #state::Unselected, R = #state::NoRole> {
+                inner: #runtime::Event<#args, #label_alias>, label: L, destination: D, role: R,
+            }
+            #(#cfg)*
+            impl<L, D, R> ::core::fmt::Debug for #signal<L, D, R> {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result { f.debug_struct(stringify!(#signal)).finish_non_exhaustive() }
+            }
+            #(#cfg)*
+            impl<L, D, R> #signal<L, D, R> {
+                /// Number of registered subscriptions, including expired weak receivers.
+                pub fn connection_count(&self) -> usize { self.inner.connection_count() }
+            }
+            #(#cfg)*
+            impl<L> #signal<L> {
+                /// Run a standalone callback on this shard.
+                pub fn on_shard(self, handle: &#runtime::ShardEventHandle) -> #signal<L, #runtime::ShardEventHandle> {
+                    #signal { inner: self.inner, label: self.label, destination: handle.clone(), role: self.role }
+                }
+                /// Run a callback with a weak receiver on its shard.
+                pub fn with_receiver<T>(self, target: &impl #runtime::Sharded<T>) -> #signal<L, #runtime::ShardWeakHandle<T>>
+                where T: #receiver_bound {
+                    #signal { inner: self.inner, label: self.label, destination: #runtime::ShardHandle::downgrade(&#runtime::Sharded::to_handle(target)), role: self.role }
+                }
+                /// Select the receiver's event-interface role.
+                pub fn role<Role: 'static>(self) -> #signal<L, #state::Unselected, #state::Role<Role>> {
+                    #signal { inner: self.inner, label: self.label, destination: self.destination, role: Default::default() }
                 }
             }
-
-            #(#item_cfg)*
             #(#cfg)*
-            impl #signal_name {
-                /// Subscribe to every emission, regardless of its label.
-                pub fn connect<T, S>(&self, target: &S) -> #runtime::Connection<(#(#arg_types,)*), #label_type>
-                where
-                    T: #trait_bound,
-                    S: #runtime::Sharded<T>,
-                    #(#arg_types: Clone + Send + 'static,)*
-                {
-                    self.connect_as::<(), T>(target)
-                }
-
-                /// Subscribe using the selected receiver role.
-                pub fn connect_as<#role: 'static, T>(
-                    &self, target: &impl #runtime::Sharded<T>,
-                ) -> #runtime::Connection<(#(#arg_types,)*), #label_type>
-                where
-                    T: #role_bound,
-                    #(#arg_types: Clone + Send + 'static,)*
-                {
-                    self.connect_fn(target, <T as #trait_name<#role>>::#method_name)
-                }
-
-                /// Run a method or capturing callback on the receiver's shard.
-                /// Captures must be Send + Sync; the receiver itself need not be.
-                pub fn connect_fn<T>(
-                    &self, target: &impl #runtime::Sharded<T>,
-                    callback: impl Fn(&T, #(#arg_types),*) + Send + Sync + 'static,
-                ) -> #runtime::Connection<(#(#arg_types,)*), #label_type>
-                where
-                    T: #callback_bound,
-                    #(#arg_types: Clone + Send + 'static,)*
-                {
-                    self.connect_callback(target, None, callback)
-                }
-
-                /// Share callback storage across ordinary and tracked dispatch.
-                fn connect_callback<T>(
-                    &self, target: &impl #runtime::Sharded<T>,
-                    subscription: Option<#label_type>,
-                    callback: impl Fn(&T, #(#arg_types),*) + Send + Sync + 'static,
-                ) -> #runtime::Connection<(#(#arg_types,)*), #label_type>
-                where
-                    T: #callback_bound,
-                    #(#arg_types: Clone + Send + 'static,)*
-                {
-                    let handle = #runtime::ShardHandle::downgrade(&#runtime::Sharded::to_handle(target));
-                    let tracked_handle = handle.clone();
-                    let callback = ::std::sync::Arc::new(callback);
-                    let tracked_callback = callback.clone();
-                    self.inner.add_labelled_tracked_connection(subscription, move |(#(#dispatch_args,)*)| {
-                        let callback = callback.clone();
-                        #runtime::ShardHandle::upgrade_in_shard(&handle, move |#target_ident| {
-                            callback(#target_ident, #(#dispatch_args),*);
-                        });
-                    }, move |(#(#dispatch_args,)*)| {
-                        let callback = tracked_callback.clone();
-                        tracked_handle.try_deferred_upgrade_in_shard(async move |#target_ident| {
-                            callback(#target_ident, #(#dispatch_args),*);
-                        })
+            impl<L, R> #signal<L, #state::Unselected, R>
+            where L: #state::SubscriptionLabel<#label_alias>, R: #state::ReceiverRole {
+                /// Connect the receiver's interface handler, holding it weakly.
+                pub fn connect<T>(self, target: &impl #runtime::Sharded<T>) -> #runtime::Connection<#args, #label_alias>
+                where T: #receiver_bound + #trait_name<R::Type>, #bounds {
+                    #state::connect_receiver(&self.inner, self.label.subscription(), target, move |target, (#(#dispatch_args,)*)| {
+                        <T as #trait_name<R::Type>>::#method(target, #(#dispatch_args),*);
                     })
                 }
-
-                #labelled_connect
-
-                /// Queue delivery to wildcard and matching subscriptions.
-                /// A labelled signal takes its emitted label before the event arguments.
-                pub fn emit(&self, #label_param #(#arg_names: #arg_types),*)
-                where
-                    #(#arg_types: Clone + Send + 'static,)*
-                {
-                    self.inner.emit_labelled(#dispatch_label, (#(#arg_names,)*));
-                }
-
-                /// Dispatch immediately and observe all selected deliveries.
-                /// Rejected subscriptions are skipped; matching panics become delivery errors.
-                pub fn emit_tracked(&self, #label_param #(#arg_names: #arg_types),*)
-                    -> impl ::core::future::Future<Output = Result<(), #runtime::DeliveryError>> + Send + 'static + use<>
-                where
-                    #(#arg_types: Clone + Send + 'static,)*
-                {
-                    self.inner.emit_labelled_tracked(#dispatch_label, (#(#arg_names,)*))
+            }
+            #(#cfg)*
+            impl<L> #signal<L, #runtime::ShardEventHandle>
+            where L: #state::SubscriptionLabel<#label_alias> {
+                /// Register a queued callback. Captures must be Send + Sync.
+                pub fn connect(self, callback: impl Fn(#(#types),*) + Send + Sync + 'static) -> #runtime::Connection<#args, #label_alias>
+                where #bounds {
+                    #state::connect_shard(&self.inner, self.label.subscription(), self.destination, move |(#(#dispatch_args,)*)| callback(#(#dispatch_args),*))
                 }
             }
-        });
-
-        set_fields.push(
-            quote!(#(#cfg)* #[doc = "Signal storage for this event method."] #method_name: #signal_name),
-        );
-        extension_signal_methods.push(quote! {
-            /// Access this event signal to connect listeners.
             #(#cfg)*
-            fn #method_name(&self) -> &#signal_name {
-                &self.events().#method_name
+            impl<L, T> #signal<L, #runtime::ShardWeakHandle<T>>
+            where L: #state::SubscriptionLabel<#label_alias>, T: #receiver_bound {
+                /// Register a callback receiving the weak receiver and event arguments.
+                pub fn connect(self, callback: impl Fn(&T, #(#types),*) + Send + Sync + 'static) -> #runtime::Connection<#args, #label_alias>
+                where #bounds {
+                    #state::connect_receiver(&self.inner, self.label.subscription(), &self.destination, move |target, (#(#dispatch_args,)*)| callback(target, #(#dispatch_args),*))
+                }
             }
-        });
-        extension_emitter_methods.push(quote! {
-            /// Queue delivery; labelled signals take the label before event arguments.
+            #selected_label
             #(#cfg)*
-            fn #emit_name(&self, #label_param #(#arg_names: #arg_types),*)
-            where
-                #(#arg_types: Clone + Send + 'static,)*
-            {
-                self.events().#method_name.emit(#label_arg #(#arg_names),*);
+            /// Borrowed emission builder; emission access cannot be recovered from a signal.
+            #[must_use = "call emit to dispatch this event"]
+            pub struct #emitter<'a, L = #initial_label, M = #state::Untracked> {
+                inner: &'a #runtime::Event<#args, #label_alias>, label: L, mode: M,
             }
-
-            /// Dispatch immediately and await selected deliveries, reporting matching or handler errors.
             #(#cfg)*
-            fn #emit_tracked_name(&self, #label_param #(#arg_names: #arg_types),*)
-                -> impl ::core::future::Future<Output = Result<(), #runtime::DeliveryError>> + Send + 'static
-            where
-                #(#arg_types: Clone + Send + 'static,)*
-            {
-                self.events().#method_name.emit_tracked(#label_arg #(#arg_names),*)
+            impl<L, M> ::core::fmt::Debug for #emitter<'_, L, M> {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result { f.debug_struct(stringify!(#emitter)).finish_non_exhaustive() }
+            }
+            #(#cfg)*
+            impl<'a, L> #emitter<'a, L> {
+                /// Observe completion and delivery errors after dispatch.
+                pub fn tracked(self) -> #emitter<'a, L, #state::Tracked> {
+                    #emitter { inner: self.inner, label: self.label, mode: #state::Tracked }
+                }
+                /// Convert to subscription access, preserving any selected label.
+                pub fn signal(self) -> #signal<L> {
+                    #signal { inner: self.inner.clone(), label: self.label, destination: #state::Unselected, role: #state::NoRole }
+                }
+            }
+            #(#cfg)*
+            impl #emitter<'_, #state::Selected<#label_alias>> {
+                /// Queue this event for all matching subscriptions.
+                pub fn emit(self, #(#names: #types),*) where #bounds {
+                    self.inner.emit_labelled(self.label.0, (#(#names,)*));
+                }
+            }
+            #(#cfg)*
+            impl #emitter<'_, #state::Selected<#label_alias>, #state::Tracked> {
+                /// Submit immediately; dropping the completion future does not cancel delivery.
+                pub fn emit(self, #(#names: #types),*) -> impl ::core::future::Future<Output = Result<(), #runtime::DeliveryError>> + Send + 'static + use<>
+                where #bounds {
+                    self.inner.emit_labelled_tracked(self.label.0, (#(#names,)*))
+                }
             }
         });
     }
-
-    let connect_calls = methods.iter().map(|(name, _, _, _, cfg)| {
-        quote! {
-            #(#cfg)* group.push(self.#name.connect_as::<#role, T>(target));
-        }
-    });
-    let accessors = methods.iter().map(|(name, signal, _, _, cfg)| {
-        quote! {
-            /// Borrow a signal without replacing its subscription storage.
-            #(#cfg)*
-            #visibility fn #name(&self) -> &#signal { &self.#name }
-        }
-    });
     quote! {
         #trait_item
-
-        #(#signal_defs)*
-
-        /// Generated storage for all signals in the event interface.
-        /// See the eventful-rs crate guide for a complete typed-event example.
         #(#item_cfg)*
-        #[derive(Debug, Default)]
-        #visibility struct #set_name {
-            #(#set_fields,)*
-        }
-
+        #[doc(hidden)]
+        #visibility trait #receiver_bound: #runtime::Eventful + #runtime::HasEvents<Self::EventSetType> #extra_bound + Sized + 'static {}
         #(#item_cfg)*
-        impl #set_name {
-            #(#accessors)*
-
+        impl<T> #receiver_bound for T where T: #runtime::Eventful + #runtime::HasEvents<T::EventSetType> #extra_bound + 'static {}
+        #(#item_cfg)*
+        #[allow(non_snake_case)]
+        mod #module {
+            use super::*;
+            #(#definitions)*
+            /// Subscription-only storage for this event interface.
+            #[derive(Debug)]
+            pub struct #set_name { #(#fields,)* }
+            impl Default for #set_name { fn default() -> Self { Self { #(#defaults,)* } } }
+            impl #set_name { #(#signal_accessors)* }
+            /// Source-owned emission access. Handles retain only its subscription view.
+            #[derive(Debug, Default)]
+            pub struct #emissions { signals: ::std::sync::Arc<#set_name> }
+            impl #emissions {
+                /// Borrow the subscription-only event set.
+                pub fn signals(&self) -> &::std::sync::Arc<#set_name> { &self.signals }
+                #(#emission_accessors)*
+            }
+            /// Access individual signals through local or remote source handles.
+            pub trait #ext_signals_name: #runtime::HasEvents<#set_name> { #(#extension_accessors)* }
+            impl<T> #ext_signals_name for #runtime::ShardRc<T>
+            where T: #runtime::Eventful<EventSetType = #set_name> + #runtime::HasEvents<#set_name> + 'static {}
+            impl<T> #ext_signals_name for #runtime::ShardRcHandle<T>
+            where T: #runtime::Eventful<EventSetType = #set_name> + #runtime::HasEvents<#set_name> + 'static {}
             #bulk_cfg
-            /// Subscribe the receiver to every signal using the selected role.
-            pub fn connect_events_as<#role: 'static, T>(
-                &self, target: &impl #runtime::Sharded<T>,
-            ) -> #runtime::ConnectionGroup
-            where
-                T: #callback_bound + #trait_name<#role>,
-            {
-                <Self as #runtime::ConnectEventsAs<T, #role>>::connect_events_as(self, target)
+            impl<T> #runtime::ConnectEvents<T> for #set_name
+            where T: #receiver_bound + #trait_name {
+                fn connect_events<S: #runtime::Sharded<T>>(&self, target: &S) -> #runtime::ConnectionGroup {
+                    <Self as #runtime::ConnectEventsAs<T, ()>>::connect_events_as(self, target)
+                }
             }
-        }
-
-        #(#item_cfg)*
-        #bulk_cfg
-        impl<T> #runtime::ConnectEvents<T> for #set_name
-        where
-            T: #runtime::Eventful + #runtime::HasEvents<T::EventSetType>
-                + #trait_name #extra_bound + 'static,
-        {
-            fn connect_events<S: #runtime::Sharded<T>>(&self, target: &S)
-                -> #runtime::ConnectionGroup
-            {
-                self.connect_events_as::<(), T>(target)
+            #bulk_cfg
+            impl<T, #role: 'static> #runtime::ConnectEventsAs<T, #role> for #set_name
+            where T: #receiver_bound + #trait_name<#role> {
+                fn connect_events_as<S: #runtime::Sharded<T>>(&self, target: &S) -> #runtime::ConnectionGroup {
+                    let mut group = #runtime::ConnectionGroup::default(); #(#bulk_calls)* group
+                }
             }
-        }
-
-        #(#item_cfg)*
-        #bulk_cfg
-        impl<T, #role: 'static> #runtime::ConnectEventsAs<T, #role> for #set_name
-        where
-            T: #callback_bound + #trait_name<#role>,
-        {
-            fn connect_events_as<S: #runtime::Sharded<T>>(&self, target: &S)
-                -> #runtime::ConnectionGroup
-            {
-                let mut group = #runtime::ConnectionGroup::default();
-                #(#connect_calls)*
-                group
+            /// Role-selected whole-interface subscription builder.
+            #[must_use = "call connect to register subscriptions"]
+            pub struct #connections<'a, R> { source: &'a #set_name, role: ::core::marker::PhantomData<fn() -> R> }
+            impl<R> ::core::fmt::Debug for #connections<'_, R> {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result { f.debug_struct(stringify!(#connections)).finish_non_exhaustive() }
             }
+            #bulk_cfg
+            impl<#role: 'static> #connections<'_, #role> {
+                /// Connect all signals with the selected receiver role.
+                pub fn connect<T>(self, target: &impl #runtime::Sharded<T>) -> #runtime::ConnectionGroup
+                where T: #receiver_bound + #trait_name<#role> {
+                    <#set_name as #runtime::ConnectEventsAs<T, #role>>::connect_events_as(self.source, target)
+                }
+            }
+            #bulk_cfg
+            impl #set_name {
+                /// Select a role for connections to every event in this interface.
+                pub fn role<R>(&self) -> #connections<'_, R> {
+                    #connections { source: self, role: ::core::marker::PhantomData }
+                }
+            }
+
         }
-
-        /// Access individual signals through local values or remote handles.
         #(#item_cfg)*
-        #visibility trait #ext_signals_name: #runtime::HasEvents<#set_name> {
-            #(#extension_signal_methods)*
-        }
-
-        /// Emit ordinary or tracked events through shared signal storage.
-        #(#item_cfg)*
-        #visibility trait #ext_emitter_name: #runtime::HasEvents<#set_name>{
-            #(#extension_emitter_methods)*
-        }
-
-        #(#item_cfg)*
-        impl<T> #ext_signals_name for #runtime::ShardRc<T>
-        where
-            T: #runtime::Eventful<EventSetType = #set_name> + #runtime::HasEvents<#set_name> + Sized + 'static,
-            #runtime::ShardRc<T>: #runtime::HasEvents<#set_name>,
-        {}
-
-        #(#item_cfg)*
-        impl<T> #ext_signals_name for #runtime::ShardRcHandle<T>
-        where
-            T: #runtime::Eventful<EventSetType = #set_name> + #runtime::HasEvents<#set_name> + Sized + 'static,
-            #runtime::ShardRcHandle<T>: #runtime::HasEvents<#set_name>,
-        {}
-
-        #(#item_cfg)*
-        impl<T> #ext_signals_name for #runtime::ShardWeakHandle<T>
-        where
-            T: #runtime::Eventful<EventSetType = #set_name> + #runtime::HasEvents<#set_name> + Sized + 'static,
-            #runtime::ShardWeakHandle<T>: #runtime::HasEvents<#set_name>,
-        {}
-
-        #(#item_cfg)*
-        impl<T: #runtime::HasEvents<#set_name> + ?Sized> #ext_emitter_name for T {}
-    }
-    .into()
+        #[allow(unused_imports)]
+        #visibility use #module::{#(#exports),*};
+        #(#aliases)*
+    }.into()
 }

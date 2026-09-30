@@ -1,0 +1,5 @@
+error[E0451]: field `signals` of struct `UpdatesEmissions` is private
+ --> tests/ui/emitter_forgery.rs:5:32
+  |
+5 |     let _ = UpdatesEmissions { signals: std::sync::Arc::new(Default::default()) };
+  |                                ^^^^^^^ private field

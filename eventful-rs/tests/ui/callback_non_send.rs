@@ -8,6 +8,6 @@ struct Button;
 struct Dialog;
 fn wire(button: ShardRcHandle<Button>, dialog: ShardRcHandle<Dialog>) {
     let capture = Rc::new(1);
-    button.clicked().connect_fn(&dialog, move |_| { drop(capture.clone()); });
+    button.clicked().with_receiver(&dialog).connect(move |_| { drop(capture.clone()); });
 }
 fn main() {}

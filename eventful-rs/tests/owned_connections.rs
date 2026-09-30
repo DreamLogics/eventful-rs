@@ -65,15 +65,18 @@ fn constructor_connections_follow_the_value_not_the_local_wrapper_or_event_set()
         let handle = window.to_handle();
         let events = window.events().clone(); // Retaining signals must not retain subscriptions past T's destruction.
         drop(window);
-        events
+        clone
+            .events
             .save()
-            .emit_tracked("local clone".into())
+            .tracked()
+            .emit("local clone".into())
             .await
             .unwrap();
         drop(clone);
-        events
-            .save()
-            .emit_tracked("remote handle".into())
+        handle
+            .deferred_upgrade_in_shard(async |w| {
+                w.events.save().tracked().emit("remote handle".into()).await
+            })
             .await
             .unwrap();
         // Ensure the source's stored value still resolves for remote callbacks.
@@ -88,24 +91,22 @@ fn constructor_connections_follow_the_value_not_the_local_wrapper_or_event_set()
         let pending =
             WindowShard::handle().try_deferred_invoke(handle.downgrade(), async move |w| {
                 started.send(()).unwrap();
+                w.events
+                    .save()
+                    .tracked()
+                    .emit("in-flight callback".into())
+                    .await
+                    .unwrap();
                 gate.await.unwrap();
                 assert_eq!(Rc::strong_count(&w.ui), 1);
             });
         ready.await.unwrap();
         drop(handle);
-        events
-            .save()
-            .emit_tracked("in-flight callback".into())
-            .await
-            .unwrap();
+        assert_eq!(events.save().connection_count(), 1);
         resume.send(()).unwrap();
         pending.await.unwrap();
         dropped.await.unwrap(); // Wait for actual shard collection, without a timing assumption.
-        events
-            .save()
-            .emit_tracked("after destruction".into())
-            .await
-            .unwrap();
+        assert_eq!(events.save().connection_count(), 0);
         assert_eq!(
             *saved.lock().unwrap(),
             ["local clone", "remote handle", "in-flight callback"]
@@ -140,12 +141,12 @@ fn ownership_survives_store_shutdown_but_not_the_last_local_reference() {
     });
     // The store has gone, but a local Rc still owns the value and its guards.
     let events = window.events().clone();
-    block_on(events.save().emit_tracked("after shutdown".into())).unwrap();
+    block_on(window.events.save().tracked().emit("after shutdown".into())).unwrap();
     assert_eq!(*saved.lock().unwrap(), ["after shutdown"]);
     drop(window);
     // An externally retained event set AND connection token do not extend
     // the lifetime of a value-owned subscription.
-    block_on(events.save().emit_tracked("after drop".into())).unwrap();
+    assert_eq!(events.save().connection_count(), 0);
     assert_eq!(*saved.lock().unwrap(), ["after shutdown"]);
     token.disconnect(); // Harmless after automatic cleanup.
     docs.join().unwrap();

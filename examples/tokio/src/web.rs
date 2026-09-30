@@ -43,7 +43,10 @@ impl WebClient {
             .map_err(|e| e.to_string())?;
         let content = response.text().await.map_err(|e| e.to_string())?;
         self.last_url.replace(Some(url));
-        self.emit_on_response_tracked(content)
+        self.events
+            .on_response()
+            .tracked()
+            .emit(content)
             .await
             .map_err(|e| e.to_string())?;
         Ok(())

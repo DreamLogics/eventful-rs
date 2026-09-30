@@ -23,7 +23,7 @@ Add eventful-rs under `[dependencies]` in `Cargo.toml`:
 
 ```toml
 [dependencies]
-eventful-rs = "0.1"
+eventful-rs = "0.2"
 ```
 
 By default a built-in thread runtime is included with basic async support, though it is advised to use tokio if you intend to work with more fancy async stuff.
@@ -73,6 +73,7 @@ use eventful_rs::*;
 trait ImportEvents {
     fn imported(&self, name: String);
 }
+# fn main() {}
 ```
 
 A listener implements this trait to decide what to do with each product name.
@@ -99,8 +100,8 @@ While the main thread awaits that result, its event loop can handle progress
 updates.
 
 For each accepted row, our method calls
-`self.emit_imported_tracked(name).await?`. The `#[eventful]` macro generates this
-method from the event trait. It delivers the event to connected listeners and
+`self.events.imported().tracked().emit(name).await?`. The `events` field exposes emission builders
+for the declared event interface. It delivers the event to connected listeners and
 waits for their handlers to finish. This lets our final "Done" message mean that
 all progress has been displayed too.
 
@@ -151,7 +152,7 @@ impl Importer {
                 continue;
             }
             self.total.set(self.total.get() + 1);
-            self.emit_imported_tracked(name.to_owned()).await?;
+            self.events.imported().tracked().emit(name.to_owned()).await?;
             count += 1;
         }
         Ok(count)
@@ -229,8 +230,8 @@ trait at the call site. If a command needs no result, `#[action]` queues it
 immediately, including from synchronous code.
 
 Use events when other parts of the application need to react to a change.
-`emit_imported(name)` queues progress without waiting for listeners;
-`emit_imported_tracked(name).await?` waits for their handlers. In our example,
+`self.events.imported().emit(name)` queues progress without waiting for listeners;
+`self.events.imported().tracked().emit(name).await?` waits for their handlers. In our example,
 waiting for each update keeps the producer paced by the display. A delivery
 failure returns a [`DeliveryError`]; it does not undo the counter change or any
 handler that already ran.
@@ -257,7 +258,7 @@ If your worker uses Tokio-based networking or timers, enable the adapter:
 
 ```toml
 [dependencies]
-eventful-rs = { version = "0.1", features = ["tokio"] }
+eventful-rs = { version = "0.2", features = ["tokio"] }
 ```
 
 Then select `runtime = tokio` for that worker. Use `runtime = tokio_main` if the
@@ -294,7 +295,7 @@ window into its own callback:
 
 ```rust,ignore
 let cancel = window.weak_callback(|window, ()| {
-    window.emit_on_close();
+    window.events.on_close().emit();
     window.hide().unwrap();
 });
 window.ui.on_cancel(move || cancel(()));
@@ -318,7 +319,7 @@ names map to Slint setters: `edit_paragraph` installs `on_edit_paragraph`.
 
 ```rust,no_run
 # #[cfg(feature = "slint")]
-# fn example() -> Result<(), Box<dyn std::error::Error>> {
+# mod example {
 use eventful_rs::*;
 slint::slint! {
     export component EditorUi inherits Window {
@@ -344,6 +345,7 @@ impl UiActions for Editor {
     fn edit_paragraph(&self, id: slint::SharedString) { /* open the editor */ }
 }
 
+# fn run() -> Result<(), Box<dyn std::error::Error>> {
 let ui = EditorUi::new()?;
 let ui_events = UiActionsBridge::new(&ui);
 let editor = Editor::bind_local(Editor {
@@ -353,6 +355,8 @@ editor.ui_events.connect_to(&editor);
 // Retain editor in your application and run the Slint event loop.
 # Ok(())
 # }
+# }
+# fn main() {}
 ```
 
 The bridge is local to the UI thread and retains no component or receiver.
@@ -376,8 +380,8 @@ Payload conversion and local-only payloads require manual callback wiring for no
 Callbacks with return values and labelled events are not supported by this bridge;
 callbacks needing an immediate result must remain synchronous handlers.
 
-Individual signal connections, `connect_fn`, `connect_as`, and tracked emitters
-are also available through the generated event API. A bridge with no enabled
+Individual signal connections, receiver callbacks, and role selection
+are also available through the generated subscription API. A bridge with no enabled
 callbacks cannot be bulk-connected. Conditional callback declarations propagate
 to the registrations as well as the event interface.
 
@@ -446,24 +450,25 @@ impl Dialog {
     fn pressed_b(&self) {}
 }
 fn wire(a: &ShardRcHandle<PushButton>, b: &ShardRcHandle<PushButton>, dialog: &ShardRcHandle<Dialog>) {
-    a.on_clicked().connect_as::<ButtonA, _>(dialog);
-    b.on_clicked().connect_as::<ButtonB, _>(dialog);
+    a.on_clicked().role::<ButtonA>().connect(dialog);
+    b.on_clicked().role::<ButtonB>().connect(dialog);
 }
+# fn main() {}
 ```
 
 `impl PushButtonEvents for Dialog` and ordinary `.connect(dialog)` select the
 role `()`. Named roles need no values or marker traits. They describe the role of
 a connection, not an intrinsic identity of the button.
 
-For all events in an interface, use `source.connect_as::<ButtonA, _>(dialog)` on
-a strong handle, or `source.events().connect_events_as::<ButtonA, _>(dialog)`.
+For all events in an interface, use `source.role::<ButtonA>().connect(dialog)` on
+a strong handle, or `source.events().role::<ButtonA>().connect(dialog)`.
 Weak handles return `None` if their event storage has expired.
-`ShardRc::connect_as::<ButtonA, _>(&local_source, dialog)` additionally ties the
+`ShardRc::role::<ButtonA>(&local_source).connect(dialog)` additionally ties the
 subscriptions to the source value's lifetime, just like `ShardRc::connect`.
 
 To connect a method directly, use
-`a.on_clicked().connect_fn(dialog, Dialog::pressed_a)`. A capturing closure works
-as well: `a.on_clicked().connect_fn(dialog, move |d| d.pressed_a())`.
+`a.on_clicked().with_receiver(dialog).connect(Dialog::pressed_a)`. A capturing closure works
+as well: `a.on_clicked().with_receiver(dialog).connect(move |d| d.pressed_a())`.
 Callbacks receive `&Dialog` followed by the event arguments and return `()`.
 They need no event-interface implementation, but still satisfy any extra receiver
 bound declared with `#[events(ExtraTrait)]`.
@@ -473,8 +478,8 @@ Callback captures must be `Send + Sync + 'static`; the receiver may contain
 holds the receiver weakly. Explicitly capturing a strong handle in a closure
 retains that handle in the usual way.
 
-Labelled signals also offer `connect_labelled_as::<ButtonA, _>(dialog, label)`
-and `connect_labelled_fn(dialog, label, callback)`. Labels filter emissions;
+Labelled signals support `.labelled(label).role::<ButtonA>().connect(dialog)`
+and `.labelled(label).with_receiver(dialog).connect(callback)`. Labels filter emissions;
 roles select the receiver implementation. Unlabelled connections to labelled
 signals receive every emission.
 
@@ -482,3 +487,52 @@ All these methods return the existing connection tokens or groups. Dropping a
 plain token leaves the subscription active; use `disconnect()` or retain a
 `scoped()` guard for cleanup. Tracked emission waits for selected callbacks to
 finish and reports dispatch failures or panics.
+
+
+## Emission and subscription builders (0.2)
+
+The private `events` field on an eventful source owns emission access. Emit from
+source methods with `self.events.changed().emit(value)`; add `.tracked()` to
+observe completion and `.labelled(label)` for labelled events. A labelled
+emission must select a label. Label and tracking selection can appear in either
+order. Emission submits immediately; dropping its completion future does not
+cancel delivery, and the future does not borrow the source.
+
+Remote handles and `HasEvents::events()` expose subscription-only views. To
+request an emission remotely, call a source action or dispatch onto the source:
+
+```ignore
+handle.deferred_upgrade_in_shard(async |source| {
+    source.events.changed().tracked().emit(value).await
+}).await?;
+```
+
+For standalone callbacks, select a shard without creating a receiver:
+
+```ignore
+source.changed().on_shard(&worker.handle()).connect(move |value| {
+    // Runs on worker, including when the emitter is already on worker.
+});
+source.changed().labelled(topic).on_shard(&worker.handle()).connect(callback);
+```
+
+Captures require `Send + Sync + 'static`. There is no weak receiver to expire;
+captures remain registered until disconnected or their subscription storage is
+released. Use `.scoped()` on the returned connection for automatic cleanup.
+The event interface's extra receiver bounds apply to receiver connections, not
+to standalone callbacks. Callbacks return `()`; independently spawned work is
+not included in tracked completion.
+
+A source can subscribe to its own events through
+`self.events.changed().signal().connect(&receiver)`. This conversion preserves
+an already selected label. Subscription access cannot be converted back into
+emission access. Weak handles expose `events() -> Option<Arc<EventSet>>`; upgrade
+that view before choosing a signal. Retaining a subscription view does not keep
+the source value alive.
+
+Generated implementation details live in a private module. Declare `#[events]`
+interfaces at module scope, including inside inline modules, so their payloads,
+labels, and receiver bounds can be resolved from that module. Public types and
+signal extension traits are re-exported with the interface's visibility. There
+is no generated emitter extension trait. The low-level `Event` type remains
+available for applications explicitly owning raw event storage.

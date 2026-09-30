@@ -34,6 +34,7 @@ type TrackedTaskFn<Args> = dyn Fn(Args) -> futures::future::BoxFuture<'static, R
 ///     #[with_label(Topics)]
 ///     fn changed(&self, value: String);
 /// }
+/// # fn main() {}
 /// ```
 pub trait EventLabel: Send + Sync + 'static {
     /// Whether this subscription accepts the emitted label.

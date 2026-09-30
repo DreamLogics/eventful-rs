@@ -23,14 +23,14 @@ A value can use `Rc`, `Cell`, or `RefCell` internally. Other threads communicate
 through a `ShardRcHandle<T>`; they never receive a reference to the value itself.
 A shard owns the queue, value store, and futures for its values.
 
-This is an early `0.1` API. It supports a standard thread executor, Tokio runtimes,
+This is an early `0.2` API. It supports a standard thread executor, Tokio runtimes,
 and an optional Slint UI adapter. It is not a distributed actor system (yet?).
 
 ## Install
 
 ```toml
 [dependencies]
-eventful-rs = "0.1"
+eventful-rs = "0.2"
 ```
 
 The standard thread runtime works without optional features. Enable an adapter

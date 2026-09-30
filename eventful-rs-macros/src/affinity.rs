@@ -160,18 +160,20 @@ pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let mut set_name = trait_name.clone();
     set_name.segments.last_mut().unwrap().ident = format_ident!("{}EventSet", trait_ident);
+    let mut emissions_name = trait_name.clone();
+    emissions_name.segments.last_mut().unwrap().ident = format_ident!("{}Emissions", trait_ident);
     let set_field = format_ident!("events");
 
     match &mut item.fields {
         syn::Fields::Named(fields) => {
             fields.named.push(syn::parse_quote! {
-                #set_field: ::std::sync::Arc<#set_name>
+                #set_field: #emissions_name
             });
         }
 
         syn::Fields::Unit => {
             let fields: syn::FieldsNamed = syn::parse_quote!({
-                #set_field: ::std::sync::Arc<#set_name>
+                #set_field: #emissions_name
             });
 
             item.fields = syn::Fields::Named(fields);
@@ -203,6 +205,16 @@ pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
             #visibility struct #trait_ident_set {}
 
             #(#item_cfg)*
+            /// Empty source-owned emission access.
+            #(#item_cfg)*
+            #[derive(Debug, Default)]
+            #visibility struct #emissions_name { signals: ::std::sync::Arc<#trait_ident_set> }
+            #(#item_cfg)*
+            impl #emissions_name {
+                /// Access the subscription-only event set.
+                pub fn signals(&self) -> &::std::sync::Arc<#trait_ident_set> { &self.signals }
+            }
+            #(#item_cfg)*
             impl Default for #trait_ident_set {
                 fn default() -> Self {
                     #trait_ident_set {}
@@ -225,7 +237,7 @@ pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
             #where_clause
         {
             fn #set_field(&self) -> &::std::sync::Arc<#set_name> {
-                &self.#set_field
+                self.#set_field.signals()
             }
         }
 

@@ -12,6 +12,6 @@ mod internal {
     }
 }
 
-use internal::{UpdatesEmittersExt, UpdatesSignalsExt};
+use internal::{UpdatesSignalsExt};
 
 fn main() {}

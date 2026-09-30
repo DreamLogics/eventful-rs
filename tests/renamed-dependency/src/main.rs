@@ -46,12 +46,14 @@ async fn main() -> Result<(), InvokeError> {
     })
     .await?;
     let _connection = state.changed().connect(&state).scoped();
-    state.emit_changed_tracked(state.read().await).await?;
+    let value = state.read().await;
+    state.deferred_upgrade_in_shard(async move |source| source.events.changed().tracked().emit(value).await).await?;
     let ui = Ui::default();
     let bridge = UiActionsBridge::new(&ui);
     bridge.connect_to(&state);
-    bridge.connect_as::<(), _>(&state).disconnect();
+    bridge.role::<()>().connect(&state).disconnect();
     ui.callback.borrow().as_ref().unwrap()(1);
-    bridge.emit_changed_tracked(2).await?;
+    ui.callback.borrow().as_ref().unwrap()(2);
+    Main::handle().try_invoke_tracked(|| {}).await?;
     Ok(())
 }
