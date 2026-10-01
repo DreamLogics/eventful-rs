@@ -47,7 +47,7 @@ note: required by a bound in `ButtonsClickedSignal::<L>::with_receiver`
    |       ^^^^^^^ required by this bound in `ButtonsClickedSignal::<L>::with_receiver`
    = note: this error originates in the attribute macro `eventful` which comes from the expansion of the attribute macro `events` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0599]: the method `connect` exists for struct `ButtonsClickedSignal<All, ShardWeakHandle<Other>>`, but its trait bounds were not satisfied
+error[E0599]: the method `connect` exists for struct `ButtonsClickedSignal<eventful_rs::__builders::All, ShardWeakHandle<Other>>`, but its trait bounds were not satisfied
   --> tests/ui/callback_constraints.rs:14:44
    |
  3 | #[events(ListenerKind)]
@@ -57,7 +57,7 @@ error[E0599]: the method `connect` exists for struct `ButtonsClickedSignal<All, 
    | --------------------------------- doesn't satisfy `Other: ListenerKind` or `Other: __ButtonsReceiver`
 ...
 14 |     button.clicked().with_receiver(&other).connect(|_, _| {});
-   |                                            ^^^^^^^ method cannot be called on `ButtonsClickedSignal<All, ShardWeakHandle<Other>>` due to unsatisfied trait bounds
+   |                                            ^^^^^^^ method cannot be called due to unsatisfied trait bounds
    |
 note: trait bound `Other: ListenerKind` was not satisfied
   --> tests/ui/callback_constraints.rs:3:10

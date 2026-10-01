@@ -50,7 +50,7 @@ help: the trait `EventLabel` is implemented for `()`
   |
   | impl EventLabel for () {
   | ^^^^^^^^^^^^^^^^^^^^^^
-note: required by a bound in `connect_receiver`
+note: required by a bound in `eventful_rs::__builders::connect_receiver`
  --> src/builders.rs
   |
   | pub fn connect_receiver<A, L, T, F>(
@@ -76,7 +76,7 @@ help: the trait `EventLabel` is implemented for `()`
   |
   | impl EventLabel for () {
   | ^^^^^^^^^^^^^^^^^^^^^^
-note: required by a bound in `connect_shard`
+note: required by a bound in `eventful_rs::__builders::connect_shard`
  --> src/builders.rs
   |
   | pub fn connect_shard<A, L, F>(

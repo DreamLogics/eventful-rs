@@ -11,7 +11,7 @@ help: the trait `Buttons<B>` is not implemented for `Dialog`
 10 | impl Buttons<A> for Dialog { fn clicked(&self) {} }
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: for that trait implementation, expected `A`, found `B`
-note: required by a bound in `ButtonsClickedSignal::<L, Unselected, R>::connect`
+note: required by a bound in `ButtonsClickedSignal::<L, eventful_rs::__builders::Unselected, R>::connect`
   --> tests/ui/receiver_role_missing.rs:4:1
    |
  4 | #[events]
@@ -61,7 +61,7 @@ help: the trait `Buttons<()>` is not implemented for `Dialog`
 10 | impl Buttons<A> for Dialog { fn clicked(&self) {} }
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: for that trait implementation, expected `A`, found `()`
-note: required by a bound in `ButtonsClickedSignal::<L, Unselected, R>::connect`
+note: required by a bound in `ButtonsClickedSignal::<L, eventful_rs::__builders::Unselected, R>::connect`
   --> tests/ui/receiver_role_missing.rs:4:1
    |
  4 | #[events]

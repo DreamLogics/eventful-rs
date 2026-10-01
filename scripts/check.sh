@@ -4,9 +4,13 @@ cmp README.md eventful-rs/README.md
 python3 -B -m unittest discover -s scripts/tests
 cargo fmt --all -- --check
 cargo run --manifest-path tests/renamed-dependency/Cargo.toml --locked
-cargo test --workspace --locked
-cargo test -p eventful-rs --no-default-features --locked
-cargo test -p eventful-rs --all-features --locked
+# Compiler diagnostic snapshots run separately with a fixed toolchain.
+cargo test --workspace --locked -- --skip invalid_macro_input_is_rejected
+cargo test -p eventful-rs --no-default-features --locked -- --skip invalid_macro_input_is_rejected
+cargo test -p eventful-rs --all-features --locked -- --skip invalid_macro_input_is_rejected
+if [ "${SKIP_UI_TESTS:-0}" != 1 ]; then
+    sh ./scripts/check-ui.sh
+fi
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo clippy -p eventful-rs -p eventful-rs-macros --lib --all-features --locked -- -D warnings -D clippy::missing_docs_in_private_items -D clippy::missing_errors_doc -D clippy::missing_panics_doc
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
