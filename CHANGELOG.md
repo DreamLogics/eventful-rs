@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 - unreleased
+## 0.2.0 - 2026-10-01
 
 - Added `#[slint_events(component = Ui)]` to generate a typed callback bridge.
   Store the generated `InterfaceBridge` in a wrapper and use `connect_to` to
@@ -28,19 +28,19 @@ Emission and subscription access are now separate capabilities. The generated
 private module holds the implementation, and re-exports the public API using
 the event interface's visibility. `#[events]` interfaces belong at module scope.
 
-| Before | 0.2 |
-| --- | --- |
-| `self.emit_changed(value)` | `self.events.changed().emit(value)` |
-| `self.emit_changed_tracked(value)` | `self.events.changed().tracked().emit(value)` |
-| Labelled emission with a leading label argument | `self.events.changed().labelled(label).emit(value)` |
-| `signal.connect_fn(&receiver, callback)` | `signal.with_receiver(&receiver).connect(callback)` |
-| `signal.connect_labelled(&receiver, label)` | `signal.labelled(label).connect(&receiver)` |
-| `signal.connect_labelled_fn(&receiver, label, callback)` | `signal.labelled(label).with_receiver(&receiver).connect(callback)` |
-| `signal.connect_as::<Role, _>(&receiver)` | `signal.role::<Role>().connect(&receiver)` |
-| `signal.connect_labelled_as::<Role, _>(&receiver, label)` | `signal.labelled(label).role::<Role>().connect(&receiver)` |
-| `handle.connect_as::<Role, _>(&receiver)` | `handle.role::<Role>().connect(&receiver)` |
-| `ShardRc::connect_as::<Role, _>(&local, &receiver)` | `ShardRc::role::<Role>(&local).connect(&receiver)` |
-| `events.connect_events_as::<Role, _>(&receiver)` | `events.role::<Role>().connect(&receiver)` |
+| Before                                                    | 0.2                                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------- |
+| `self.emit_changed(value)`                                | `self.events.changed().emit(value)`                                 |
+| `self.emit_changed_tracked(value)`                        | `self.events.changed().tracked().emit(value)`                       |
+| Labelled emission with a leading label argument           | `self.events.changed().labelled(label).emit(value)`                 |
+| `signal.connect_fn(&receiver, callback)`                  | `signal.with_receiver(&receiver).connect(callback)`                 |
+| `signal.connect_labelled(&receiver, label)`               | `signal.labelled(label).connect(&receiver)`                         |
+| `signal.connect_labelled_fn(&receiver, label, callback)`  | `signal.labelled(label).with_receiver(&receiver).connect(callback)` |
+| `signal.connect_as::<Role, _>(&receiver)`                 | `signal.role::<Role>().connect(&receiver)`                          |
+| `signal.connect_labelled_as::<Role, _>(&receiver, label)` | `signal.labelled(label).role::<Role>().connect(&receiver)`          |
+| `handle.connect_as::<Role, _>(&receiver)`                 | `handle.role::<Role>().connect(&receiver)`                          |
+| `ShardRc::connect_as::<Role, _>(&local, &receiver)`       | `ShardRc::role::<Role>(&local).connect(&receiver)`                  |
+| `events.connect_events_as::<Role, _>(&receiver)`          | `events.role::<Role>().connect(&receiver)`                          |
 
 - Standalone callbacks use `signal.on_shard(&shard.handle()).connect(callback)`.
   Labels compose before or after shard selection. Captures require
