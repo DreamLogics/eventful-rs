@@ -87,6 +87,22 @@ impl<T> ShardValue<T> {
             value,
         }
     }
+
+    /// Retain a subscription group until the value is destroyed, first pruning
+    /// groups that were already disconnected so repeated connects stay bounded.
+    pub(crate) fn own_connections(&self, group: crate::ConnectionGroup) {
+        let pruned: Vec<_> = {
+            let mut connections = self.connections.borrow_mut();
+            let (pruned, live) = std::mem::take(&mut *connections)
+                .into_iter()
+                .partition(crate::ScopedConnectionGroup::is_disconnected);
+            *connections = live;
+            connections.push(group.scoped());
+            pruned
+        };
+        // Guards may release user captures; never drop them under the borrow.
+        drop(pruned);
+    }
 }
 
 impl<T> std::ops::Deref for ShardValue<T> {
@@ -551,10 +567,7 @@ where
         T::EventSetType: crate::ConnectEvents<U>,
     {
         let group = crate::ConnectEvents::connect_events(&*this.events, target);
-        this.inner
-            .connections
-            .borrow_mut()
-            .push(group.clone().scoped());
+        this.inner.own_connections(group.clone());
         group
     }
 
@@ -574,10 +587,7 @@ where
         T::EventSetType: crate::ConnectEventsAs<U, Role>,
     {
         let group = crate::ConnectEventsAs::<U, Role>::connect_events_as(&*this.events, target);
-        this.inner
-            .connections
-            .borrow_mut()
-            .push(group.clone().scoped());
+        this.inner.own_connections(group.clone());
         group
     }
 }

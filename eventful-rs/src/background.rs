@@ -54,11 +54,12 @@ impl Shared {
                 .map_err(|_| "shard thread panicked".to_owned());
             state.result = Some(result);
         }
-        state
-            .result
-            .clone()
-            .unwrap()
-            .map_err(|e| ShardError::JoinError(e, None))
+        let result = state.result.clone().unwrap();
+        drop(state);
+        if result.is_ok() {
+            crate::registry::unregister_shard(self.handle.shard_id);
+        }
+        result.map_err(|e| ShardError::JoinError(e, None))
     }
 }
 /// Own a dedicated thread while exposing the common submission handle.

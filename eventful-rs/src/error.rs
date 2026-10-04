@@ -1,5 +1,5 @@
 //! Runtime lifecycle errors and shard identities.
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Failure to join a shard or post work to a backend.
 #[derive(Debug)]
@@ -56,7 +56,7 @@ impl std::error::Error for ShardError {
 }
 
 /// Monotonic process-wide allocator for shard identities.
-static LAST_SHARD_ID: Mutex<usize> = Mutex::new(0);
+static LAST_SHARD_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Opaque process-local shard identity, allocated by [`ShardId::new`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -71,11 +71,10 @@ impl ShardId {
     /// # Panics
     /// Panics if all process-local identities have been allocated.
     pub fn new() -> Self {
-        let mut last_id = LAST_SHARD_ID.lock().unwrap_or_else(|e| e.into_inner());
-        *last_id = last_id
-            .checked_add(1)
+        let last_id = LAST_SHARD_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("shard identity space exhausted");
-        ShardId(*last_id)
+        ShardId(last_id + 1)
     }
 }
 

@@ -72,6 +72,28 @@ fn lookup_matches_value_identity_and_retains_the_entry() {
 }
 
 #[test]
+fn disconnected_owned_groups_are_pruned_on_reconnect() {
+    let value = ShardValue::new(Value {
+        events: Arc::new(()),
+    });
+    let event = crate::Event::<()>::default();
+    for _ in 0..100 {
+        let group: crate::ConnectionGroup = [event.add_connection(|()| {})].into_iter().collect();
+        value.own_connections(group.clone());
+        group.disconnect();
+    }
+    assert_eq!(value.connections.borrow().len(), 1);
+    assert_eq!(event.connection_count(), 0);
+
+    let live: crate::ConnectionGroup = [event.add_connection(|()| {})].into_iter().collect();
+    value.own_connections(live);
+    assert_eq!(value.connections.borrow().len(), 1);
+    assert_eq!(event.connection_count(), 1);
+    drop(value); // Owned groups still disconnect with the value.
+    assert_eq!(event.connection_count(), 0);
+}
+
+#[test]
 fn lookup_requires_the_matching_thread_local_store() {
     let (handle, _rx) = crate::ShardEventHandle::channel();
     let value = Value {

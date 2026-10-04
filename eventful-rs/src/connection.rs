@@ -1,5 +1,8 @@
 //! Individual and grouped subscription lifetimes.
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use crate::event::EventInternal;
 
@@ -70,6 +73,8 @@ impl<Args, Label> Drop for ScopedConnection<Args, Label> {
 pub struct ConnectionGroup {
     /// Type-erased removers for the individual signal subscriptions.
     disconnectors: Vec<Arc<dyn Fn() + Send + Sync>>,
+    /// Set once any clone of this group disconnects; lets owners prune it.
+    disconnected: Arc<AtomicBool>,
 }
 
 impl ConnectionGroup {
@@ -91,9 +96,15 @@ impl ConnectionGroup {
 
     /// Remove each subscription independently; queued snapshots remain valid.
     fn disconnect_all(&self) {
+        self.disconnected.store(true, Ordering::Release);
         for disconnect in &self.disconnectors {
             disconnect();
         }
+    }
+
+    /// Whether this group or a clone of it has been disconnected.
+    pub(crate) fn is_disconnected(&self) -> bool {
+        self.disconnected.load(Ordering::Acquire)
     }
 
     /// Disconnect the whole group when the returned guard is dropped.
@@ -107,6 +118,13 @@ impl ConnectionGroup {
 #[derive(Clone)]
 #[must_use = "keep the guard alive for as long as the subscriptions are needed"]
 pub struct ScopedConnectionGroup(ConnectionGroup);
+
+impl ScopedConnectionGroup {
+    /// Whether this group or a clone of it has been disconnected.
+    pub(crate) fn is_disconnected(&self) -> bool {
+        self.0.is_disconnected()
+    }
+}
 
 impl Drop for ScopedConnectionGroup {
     fn drop(&mut self) {

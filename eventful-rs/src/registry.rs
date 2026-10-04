@@ -74,3 +74,42 @@ pub async fn join_all_shards_async() -> Result<(), ShardError> {
 pub(crate) fn register_shard(shard_id: ShardId, join: JoinCallback) {
     SHARD_REGISTRY.lock().unwrap().push((shard_id, join));
 }
+
+/// Forget a shard that has been joined successfully.
+/// A no-op while `join_all_shards` holds the entry; it is not retained on success.
+pub(crate) fn unregister_shard(shard_id: ShardId) {
+    let removed: Vec<_> = {
+        let mut registry = SHARD_REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        let (removed, kept) = std::mem::take(&mut *registry)
+            .into_iter()
+            .partition(|(id, _)| *id == shard_id);
+        *registry = kept;
+        removed
+    };
+    // Release callback captures outside the registry lock.
+    drop(removed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SHARD_REGISTRY;
+    use crate::EventLoop;
+
+    fn registered(id: crate::ShardId) -> bool {
+        SHARD_REGISTRY
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(registered, _)| *registered == id)
+    }
+
+    #[test]
+    fn joined_shards_leave_the_registry() {
+        let shard = crate::std_rt::Shard::new("registry-join");
+        let id = shard.shard_id();
+        assert!(registered(id));
+        shard.join().unwrap();
+        assert!(!registered(id));
+        shard.join().unwrap(); // Repeated joins still report the cached outcome.
+    }
+}

@@ -54,7 +54,8 @@ fn matching_precedes_cloning_and_dispatch_and_preserves_connection_lifetimes() {
     // Both matching and submission happen before the future is polled.
     assert_eq!(selected.load(Ordering::SeqCst), 2);
     assert_eq!(wildcards.load(Ordering::SeqCst), 2);
-    assert_eq!(clones.load(Ordering::SeqCst), 4);
+    // Rejected subscriptions never clone; the last match takes the original.
+    assert_eq!(clones.load(Ordering::SeqCst), 2);
     block_on(delivery).unwrap();
 
     // Cloning a connection does not require a cloneable label or payload type.

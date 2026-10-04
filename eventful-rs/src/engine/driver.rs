@@ -72,10 +72,7 @@ pub(crate) async fn drive(
         };
         match event {
             Next::Command(Some(Command::Job(job))) => {
-                let ctx = context.clone();
-                let mut future = guarded(Box::pin(async move {
-                    job(ctx).await;
-                }));
+                let mut future = guarded(job(context.clone()));
                 // Start in admission order. A Pending operation then interleaves
                 // with later work; a synchronous callback finishes right here.
                 let polled =
