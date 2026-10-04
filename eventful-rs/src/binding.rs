@@ -49,6 +49,49 @@ pub trait ShardBinding: 'static {
     {
         Self::handle().bind_async(f)
     }
+
+    /// Spawn a future on this shard's thread from code already running there.
+    /// The future need not be `Send` and may capture `Rc`, `RefCell`, or
+    /// [`ShardRc`]. The shard's driver polls it, first on a later turn rather
+    /// than during this call, and it interleaves with other work at each
+    /// `.await`. Panics are reported like callback panics. Shutdown aborts
+    /// local tasks instead of waiting for them.
+    ///
+    /// Futures see the shard's runtime: Tokio timers and I/O need a Tokio shard.
+    /// Capturing a strong reference keeps that value alive until the task ends;
+    /// prefer [`ShardRc::spawn_owned`] or a [`crate::ShardWeak`] for loops.
+    ///
+    /// ```
+    /// use eventful_rs::*;
+    /// use std::{cell::Cell, rc::Rc};
+    /// declare_shard!(Ui, runtime = main);
+    ///
+    /// Ui::shard().run_main(|| async {
+    ///     let ticks = Rc::new(Cell::new(0));
+    ///     let counter = ticks.clone();
+    ///     let task = Ui::spawn_local(async move {
+    ///         counter.set(counter.get() + 1);
+    ///         counter.get()
+    ///     })?;
+    ///     // Awaiting the task from this shard yields its output.
+    ///     assert_eq!(task.await?, 1);
+    ///     assert_eq!(ticks.get(), 1);
+    ///     Ok::<(), InvokeError>(())
+    /// })?;
+    /// # Ok::<(), InvokeError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns [`InvokeError::WrongShard`] when not called on this shard's
+    /// thread, or [`InvokeError::Closed`] once the shard is shutting down.
+    fn spawn_local<F>(future: F) -> Result<crate::LocalTask<F::Output>, InvokeError>
+    where
+        Self: Sized,
+        F: Future + 'static,
+        F::Output: 'static,
+    {
+        crate::local_task::spawn(&Self::handle(), future)
+    }
 }
 impl<S: ShardBinding> ShardAffinity for S {
     /// Return the required shard identity, or `None` for dynamic affinity.

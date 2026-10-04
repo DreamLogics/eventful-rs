@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Added `ShardRcHandle::try_local` and `ShardWeakHandle::try_local` to recover a
+  local `ShardRc` synchronously from a handle when already running on the value's
+  shard, instead of queuing a `deferred_upgrade_in_shard` job.
+- Added shard-local tasks on every runtime: `Shard::spawn_local(future)` (via
+  `ShardBinding`), `ShardRc::spawn_local`, and `ShardRc::spawn_owned`. Futures
+  and their outputs need not be `Send`. Awaiting the returned `LocalTask<T>` on
+  the same shard yields the output, or `Canceled`/`Panicked`. Dropping it aborts
+  the task; `detach()` returns a cloneable, thread-safe `TaskHandle`. Tasks spawned with
+  `spawn_owned` are aborted when their value is destroyed. Shutdown aborts local
+  tasks before draining queued work, so endless loops no longer hold it up for
+  the grace period. `tokio::task::spawn_local` working on Tokio shards remains an
+  implementation detail and is not guaranteed.
+- Event methods in `#[events]` traits may provide default handler bodies; this is
+  now documented and tested. Unused parameters in default bodies no longer
+  trigger `unused_variables`. Bulk connections still deliver every event.
+
 ## 0.2.1 - 2026-10-04
 
 - Shards now collect a value as soon as its last strong reference is released and

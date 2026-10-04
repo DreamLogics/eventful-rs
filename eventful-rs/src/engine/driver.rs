@@ -1,5 +1,5 @@
 //! Queue scheduling, panic isolation, release-driven collection, and shutdown draining.
-use super::{Command, LocalFuture, Receiver, ShardEventHandle, store};
+use super::{Command, LocalFuture, Receiver, ShardEventHandle, spawner, store};
 use crate::shard_handle::ShardRcStore;
 use futures::{FutureExt, StreamExt, future::CatchUnwind, stream::FuturesUnordered};
 use std::{any::Any, cell::RefCell, panic::AssertUnwindSafe, time::Duration};
@@ -33,6 +33,7 @@ fn collect_orphans(store: &RefCell<ShardRcStore>) {
 }
 
 /// Start jobs in admission order, poll local futures, then drain with a grace period.
+/// Spawned local tasks are polled separately and aborted before the drain.
 pub(crate) async fn drive(
     mut rx: Receiver,
     handle: ShardEventHandle,
@@ -47,10 +48,13 @@ pub(crate) async fn drive(
     // Collection is driven by token releases rather than polling, so an idle
     // shard stays asleep.
     let signal = context.borrow().signal();
+    let spawner = spawner(handle.shard_id);
+    let mut local_tasks = FuturesUnordered::<Guarded>::new();
     enum Next {
         Command(Option<Command>),
         Completed,
         Collect,
+        Spawned(Vec<LocalFuture>),
     }
     let mut turns = 0usize;
     loop {
@@ -78,11 +82,21 @@ pub(crate) async fn drive(
                 }
             }
             .fuse();
-            futures::pin_mut!(next);
+            let task = async {
+                if local_tasks.is_empty() {
+                    futures::future::pending::<()>().await
+                } else if let Some(outcome) = local_tasks.next().await {
+                    report(outcome);
+                }
+            }
+            .fuse();
+            futures::pin_mut!(next, task);
             futures::select! {
                 command = rx.next().fuse() => Next::Command(command),
                 _ = next => Next::Completed,
+                _ = task => Next::Completed,
                 _ = futures::future::poll_fn(|cx| signal.poll_candidates(cx)).fuse() => Next::Collect,
+                spawned = futures::future::poll_fn(|cx| spawner.poll_queued(cx)).fuse() => Next::Spawned(spawned),
             }
         };
         match event {
@@ -109,9 +123,16 @@ pub(crate) async fn drive(
             Next::Command(None) => break,
             Next::Completed => collect_orphans(&context),
             Next::Collect => collect(&context),
+            // First polled on a later turn, never inside the spawning call.
+            Next::Spawned(spawned) => local_tasks.extend(spawned.into_iter().map(guarded)),
         }
     }
     rx.close();
+    // Local tasks are typically endless loops: abort them instead of letting
+    // them hold the drain for the full grace period. Drop them on this thread.
+    drop(spawner.close());
+    drop(local_tasks);
+    collect_orphans(&context);
     {
         let drain = async {
             while let Some(outcome) = pending.next().await {

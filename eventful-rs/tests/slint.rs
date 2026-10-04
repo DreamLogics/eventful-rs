@@ -1,5 +1,7 @@
 #![cfg(feature = "slint")]
-use eventful_rs::{EventLoop, EventLoopHandle, Eventful, HasEvents, InvokeError, ShardRc};
+use eventful_rs::{
+    EventLoop, EventLoopHandle, Eventful, HasEvents, InvokeError, ShardBinding, ShardRc,
+};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use std::{cell::RefCell, rc::Rc, sync::mpsc, time::Duration};
 
@@ -120,6 +122,15 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
     })
     .unwrap();
     assert_eq!(*local.value, 13);
+    // Local tasks may also be spawned before the Slint loop polls the driver.
+    let (task_done, task_thread) = futures::channel::oneshot::channel();
+    let early = Ui::spawn_local(async move {
+        let _ = task_done.send(std::thread::current().id());
+    })
+    .unwrap();
+    let endless = Ui::spawn_local(futures::future::pending::<()>())
+        .unwrap()
+        .detach();
     let shard = Ui::shard();
     std::thread::spawn(|| {
         assert!(matches!(
@@ -288,7 +299,14 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
                 .await,
             Ok(11)
         );
+        assert_eq!(task_thread.await.unwrap(), owner);
+        assert!(early.is_finished());
+        // Shutdown aborts endless local tasks instead of waiting for the grace period.
+        let stopping = std::time::Instant::now();
         shard.shutdown_async().await.unwrap();
+        assert!(stopping.elapsed() < Duration::from_secs(1));
+        assert!(endless.is_finished());
+        assert_eq!(Ui::spawn_local(async {}).err(), Some(InvokeError::Closed));
         assert!(matches!(
             ShardRc::try_bind(UiState {
                 value: Rc::new(0),

@@ -45,7 +45,8 @@ when your application needs it:
 - **Typed events:** connect listeners individually or by interface, with optional
   application-defined routing labels and tracked delivery.
 - **Method dispatch:** await results or queue actions through generated handle methods.
-- **Explicit lifetimes:** strong/weak handles, scoped connections, and coordinated shutdown.
+- **Explicit lifetimes:** strong/weak handles, scoped connections, owned local
+  tasks, and coordinated shutdown.
 - **Runtime choice:** dedicated threads, a main-thread loop, Tokio, or a Slint UI loop.
 
 See the [complete quick start and API documentation](https://docs.rs/eventful-rs)

@@ -296,6 +296,44 @@ any in-flight callbacks on it finish, so weak upgrades can succeed until then.
 A local strong reference can also keep a value alive after shard shutdown;
 upgrading it does not restart event delivery.
 
+Code already running on a value's shard can turn a handle back into a local
+reference with `handle.try_local()`, without queuing a job. This is useful when
+values on one shard share a local service, such as an HTTP client with generic
+methods that have no handle wrapper:
+
+```rust
+use eventful_rs::*;
+declare_shard!(Net, runtime = main);
+
+#[eventful(shard = Net)]
+struct Client;
+impl Client {
+    fn request<T: Default>(&self, _path: &str) -> T { T::default() }
+}
+
+#[eventful(shard = Net)]
+struct Rooms {
+    client: ShardRc<Client>,
+}
+
+Net::shard().run_main(|| async {
+    let client = Client::bind_local(Client { events: Default::default() })?.to_handle();
+    // For example inside a spawn factory or a dispatched method on the shard:
+    let rooms = Rooms::bind_local(Rooms {
+        client: client.try_local()?,
+        events: Default::default(),
+    })?;
+    let count: u32 = rooms.client.request("/rooms");
+    assert_eq!(count, 0);
+    Ok::<(), InvokeError>(())
+})?;
+# Ok::<(), InvokeError>(())
+```
+
+`ShardRcHandle::try_local` fails with `WrongShard` on any other thread, so the
+reference still never leaves its shard. `ShardWeakHandle::try_local` returns
+`Ok(None)` once the value has been collected.
+
 For callbacks owned by the UI, capture a weak reference instead of cloning the
 window into its own callback:
 
@@ -336,6 +374,60 @@ callbacks run synchronously on the calling thread without queuing. For callbacks
 returning a value, `weak_callback_or_else(handler, fallback)` requires an explicit
 fallback closure receiving the same argument. Avoid capturing a strong reference
 to the owner inside either closure, which would reintroduce the cycle.
+
+### Background work on a shard
+
+`Worker::spawn_local(future)` ([`ShardBinding::spawn_local`]) runs a future on a
+declared shard's own thread, and `ShardRc::spawn_local(&value, future)` on a
+value's shard. Call them from code already running there. The future need not be `Send`, so it can hold `Rc`,
+`RefCell`, or a [`ShardRc`]. The shard's driver polls it on a later turn, and it
+interleaves with queued calls at each `.await`. This works on every runtime; a
+future that uses Tokio timers or I/O still needs a Tokio shard.
+
+Every task has an owner. Dropping the returned [`LocalTask`] aborts the task at
+its next `.await`; `detach()` lets it run and returns a cloneable [`TaskHandle`]
+that can still abort it. Awaiting a `LocalTask` from another future on the same
+shard yields the task's output, or `InvokeError::Canceled` if it was aborted and
+`InvokeError::Panicked` if it panicked. Shutdown aborts all local tasks before draining queued
+work, so a polling loop never holds up shutdown. For a loop that belongs to a
+value, use `ShardRc::spawn_owned`: the task is aborted when the value is
+destroyed and receives a weak reference, so it does not keep the value alive.
+
+```rust
+use eventful_rs::*;
+use std::cell::Cell;
+declare_shard!(Net, runtime = main);
+
+#[eventful(shard = Net)]
+struct ChatFeed {
+    polls: Cell<u32>,
+}
+async fn next_batch() { /* await a long-polling request here */ }
+
+Net::shard().run_main(|| async {
+    let feed = ChatFeed::bind_local(ChatFeed { polls: Cell::new(0), events: Default::default() })?;
+    let task = ShardRc::spawn_owned(&feed, |feed| async move {
+        loop {
+            next_batch().await;
+            // Upgrade per iteration; a strong reference across `.await` keeps
+            // the value alive for as long as the loop runs.
+            let Some(feed) = feed.upgrade() else { return };
+            feed.polls.set(feed.polls.get() + 1);
+            # return;
+        }
+    })?;
+    # let _ = task;
+    // Dropping the last reference to the feed also stops its loop.
+    Ok::<(), InvokeError>(())
+})?;
+# Ok::<(), InvokeError>(())
+```
+
+A task that captures a strong reference keeps that value alive until the task
+ends; prefer `spawn_owned` or a [`ShardWeak`]. Panics in a task are reported like
+callback panics and mark it finished; the shard keeps running. Running Tokio's
+own `spawn_local` on Tokio shards happens to work today, but it is not
+guaranteed and its tasks are invisible to shutdown.
 
 ### Bridging Slint callbacks
 
@@ -386,7 +478,11 @@ editor.ui_events.connect_to(&editor);
 ```
 
 The bridge is local to the UI thread and retains no component or receiver.
-Store it in the wrapper so it lives as long as the wrapper. Slint callbacks hold
+Store it in the wrapper so it lives as long as the wrapper, and keep the
+wrapper's `ShardRc` alive for as long as the window is open. It is the only
+strong owner, while Slint keeps a shown window alive on its own: dropping the
+`ShardRc`, for example at the end of a setup function, leaves the window on
+screen but silently stops delivering its callbacks. Slint callbacks hold
 only a weak reference to the bridge; dropping the bridge stops forwarding even
 if something else retains its event storage. Already queued events can still run.
 
@@ -397,7 +493,7 @@ Unlisted callbacks are unaffected.
 
 Delivery is queued, including delivery to a wrapper on the same UI shard. Handlers
 run after the original Slint callback returns. For async work, a handler can queue
-an existing asynchronous handle method or start a Slint local task.
+an existing asynchronous handle method or start a [local task](#background-work-on-a-shard).
 
 Callback argument types must match Slint's generated signatures and implement
 `Clone + Send + 'static`, just like ordinary event payloads. For example, use
@@ -449,6 +545,12 @@ fn wire(a: &ShardRcHandle<PushButton>, b: &ShardRcHandle<PushButton>, dialog: &S
 `impl PushButtonEvents for Dialog` and ordinary `.connect(dialog)` select the
 role `()`. Named roles need no values or marker traits. They describe the role of
 a connection, not an intrinsic identity of the button.
+
+Event methods may have a default body, such as `fn on_hovered(&self) {}`, so a
+listener implements only the events it needs; with roles, each role impl gets
+its own defaults. Bulk connections still deliver every event, and a delivery to
+a handler the listener did not override runs the default. For very frequent
+events, connect only the signals the listener handles.
 
 For all events in an interface, use `source.role::<ButtonA>().connect(dialog)` on
 a strong handle, or `source.events().role::<ButtonA>().connect(dialog)`.

@@ -23,6 +23,8 @@ mod shard_handle;
 pub use shard_handle::*;
 mod connection;
 pub use connection::*;
+mod local_task;
+pub use local_task::{LocalTask, TaskHandle};
 
 pub mod local_rt;
 

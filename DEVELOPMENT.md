@@ -14,6 +14,8 @@ Runtime crate paths are relative to `eventful-rs/src`.
   Public backend modules (`std_rt`, `local_rt`, `tokio_rt`, `tokio_local_rt`, `slint_rt`)
   are thin adapters.
 - `task.rs`: detached blocking work and cooperative cancellation.
+- `local_task.rs`: non-`Send` futures polled by a shard's driver (`spawn_local`),
+  their owning `LocalTask` guard, and `TaskHandle`.
 - `eventful-rs-macros/src`: public entry points in `lib.rs`, expansion logic grouped
   into `events`, `slint_events`, `dispatch`, `affinity`, `declaration`, and `entry`;
   `attributes` handles conditional compilation.

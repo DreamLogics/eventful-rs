@@ -71,11 +71,13 @@ where
 
 // Keep lifetime-bound subscriptions in the same Rc allocation as the value.
 // Store entries, local clones, and in-flight callbacks all retain this allocation.
-// Connections drop before T, including during shard shutdown.
-/// Keep value-owned connections in the same allocation as the value.
+// Connections drop and owned tasks abort before T, including during shard shutdown.
+/// Keep value-owned connections and tasks in the same allocation as the value.
 pub(crate) struct ShardValue<T> {
     /// Subscriptions dropped before the value, including during shutdown.
     connections: std::cell::RefCell<Vec<crate::ScopedConnectionGroup>>,
+    /// Local tasks aborted before the value drops.
+    tasks: std::cell::RefCell<Vec<crate::TaskHandle>>,
     /// The shard-local application value.
     value: T,
 }
@@ -85,8 +87,17 @@ impl<T> ShardValue<T> {
     pub(crate) fn new(value: T) -> Self {
         Self {
             connections: Default::default(),
+            tasks: Default::default(),
             value,
         }
+    }
+
+    /// Abort a local task when the value is destroyed, first pruning finished
+    /// tasks so repeated spawns stay bounded.
+    pub(crate) fn own_task(&self, task: crate::TaskHandle) {
+        let mut tasks = self.tasks.borrow_mut();
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(task);
     }
 
     /// Retain a subscription group until the value is destroyed, first pruning
@@ -103,6 +114,15 @@ impl<T> ShardValue<T> {
         };
         // Guards may release user captures; never drop them under the borrow.
         drop(pruned);
+    }
+}
+
+impl<T> Drop for ShardValue<T> {
+    fn drop(&mut self) {
+        // Aborting only flags the tasks; their shard drops the futures later.
+        for task in self.tasks.get_mut().drain(..) {
+            task.abort();
+        }
     }
 }
 
@@ -609,6 +629,69 @@ where
         ShardRc::try_from_ref(value).map(|local| local.to_handle())
     }
 }
+
+impl<T> ShardRcHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Recover a local strong reference when running on the value's shard.
+    /// Synchronous: nothing is queued. The result is the same reference
+    /// [`ShardRc::try_from_ref`] returns, and still cannot leave this thread.
+    ///
+    /// ```
+    /// use eventful_rs::*;
+    /// declare_shard!(Ui, runtime = main);
+    ///
+    /// #[eventful(shard = Ui)]
+    /// struct Client;
+    ///
+    /// Ui::shard().run_main(|| async {
+    ///     let client = Client::bind_local(Client { events: Default::default() })?;
+    ///     let handle = client.to_handle();
+    ///     let local = handle.try_local()?;
+    ///     assert!(std::ptr::eq(&*local, &*client));
+    ///     let weak = handle.downgrade();
+    ///     assert!(weak.try_local()?.is_some());
+    ///     Ok::<(), InvokeError>(())
+    /// })?;
+    /// # Ok::<(), InvokeError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns [`crate::InvokeError::WrongShard`] outside the value's shard
+    /// context, or [`crate::InvokeError::ValueMissing`] if the value is no
+    /// longer stored.
+    pub fn try_local(&self) -> Result<ShardRc<T>, crate::InvokeError> {
+        let store = crate::engine::local_store(self.shard_handle.shard_id)
+            .ok_or(crate::InvokeError::WrongShard)?;
+        let value = store
+            .borrow()
+            .get::<ShardValue<T>>(self.id.key())
+            .ok_or(crate::InvokeError::ValueMissing)?;
+        Ok(ShardRc::new(
+            self.id.clone(),
+            value,
+            self.shard_handle.clone(),
+        ))
+    }
+}
+
+impl<T> ShardWeakHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Like [`ShardRcHandle::try_local`], but yields `Ok(None)` once the value
+    /// has been collected.
+    ///
+    /// # Errors
+    /// Returns [`crate::InvokeError::WrongShard`] outside the value's shard context.
+    pub fn try_local(&self) -> Result<Option<ShardRc<T>>, crate::InvokeError> {
+        let store = crate::engine::local_store(self.shard_handle.shard_id)
+            .ok_or(crate::InvokeError::WrongShard)?;
+        let found = store.borrow().get_retained::<T>(self.id);
+        Ok(found.map(|(id, value)| ShardRc::new(id, value, self.shard_handle.clone())))
+    }
+}
 impl<T> HasEvents<T::EventSetType> for ShardRc<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + 'static,
@@ -656,6 +739,79 @@ where
         let group = crate::ConnectEvents::connect_events(&*this.events, target);
         this.inner.own_connections(group.clone());
         group
+    }
+
+    /// Spawn a future on the value's shard; the caller owns the returned task.
+    /// See [`crate::ShardBinding::spawn_local`] for scheduling, panics, and
+    /// shutdown. The future may capture this reference, but then keeps the
+    /// value alive until it ends; [`Self::spawn_owned`] avoids that.
+    ///
+    /// # Errors
+    /// Returns [`crate::InvokeError::Closed`] once the shard is shutting down.
+    pub fn spawn_local<F>(
+        this: &Self,
+        future: F,
+    ) -> Result<crate::LocalTask<F::Output>, crate::InvokeError>
+    where
+        F: Future + 'static,
+        F::Output: 'static,
+    {
+        crate::local_task::spawn(&this.shard_handle, future)
+    }
+
+    /// Spawn a task owned by the value: it is aborted when the value is
+    /// destroyed, or earlier through the returned handle. The closure receives
+    /// a weak reference, so the task does not keep the value alive.
+    ///
+    /// ```
+    /// use eventful_rs::*;
+    /// use std::cell::Cell;
+    /// declare_shard!(Ui, runtime = main);
+    ///
+    /// #[eventful(shard = Ui)]
+    /// struct Feed {
+    ///     polls: Cell<u32>,
+    /// }
+    ///
+    /// Ui::shard().run_main(|| async {
+    ///     let feed = Feed::bind_local(Feed { polls: Cell::new(0), events: Default::default() })?;
+    ///     let (first, polled) = futures::channel::oneshot::channel();
+    ///     let task = ShardRc::spawn_owned(&feed, |feed| async move {
+    ///         let mut first = Some(first);
+    ///         // A real feed would await a request or timer between polls.
+    ///         while let Some(feed) = feed.upgrade() {
+    ///             feed.polls.set(feed.polls.get() + 1);
+    ///             drop(feed); // Never hold a strong reference across an await.
+    ///             if let Some(first) = first.take() {
+    ///                 let _ = first.send(());
+    ///             }
+    ///             futures::future::pending::<()>().await;
+    ///         }
+    ///     })?;
+    ///     polled.await.expect("the feed polled");
+    ///     assert_eq!(feed.polls.get(), 1);
+    ///     // Destroying the value aborts its task; `task.abort()` stops it earlier.
+    ///     drop(feed);
+    ///     # let _ = task;
+    ///     Ok::<(), InvokeError>(())
+    /// })?;
+    /// # Ok::<(), InvokeError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns [`crate::InvokeError::Closed`] once the shard is shutting down.
+    pub fn spawn_owned<F, Fut>(
+        this: &Self,
+        task: F,
+    ) -> Result<crate::TaskHandle, crate::InvokeError>
+    where
+        F: FnOnce(ShardWeak<T>) -> Fut,
+        Fut: Future<Output = ()> + 'static,
+    {
+        let task = crate::local_task::spawn(&this.shard_handle, task(Self::downgrade(this)))?;
+        let handle = task.detach();
+        this.inner.own_task(handle.clone());
+        Ok(handle)
     }
 
     /// Select a role for source-owned connections to every event.

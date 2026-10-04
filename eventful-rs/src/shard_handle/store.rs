@@ -208,6 +208,20 @@ impl ShardRcStore {
             .and_then(|stored| stored.value.clone().downcast::<T>().ok())
     }
 
+    /// Look up a value by key and issue a token for its existing entry.
+    pub(crate) fn get_retained<T: 'static>(
+        &self,
+        key: usize,
+    ) -> Option<(ShardRcId, Rc<super::ShardValue<T>>)> {
+        let stored = self.values.get(&key)?;
+        let found = stored
+            .value
+            .clone()
+            .downcast::<super::ShardValue<T>>()
+            .ok()?;
+        Some((ShardRcId::acquire(stored.entry.clone()), found))
+    }
+
     /// Find a stored value by identity and issue a token for its existing entry.
     pub(crate) fn find_value<T: 'static>(
         &self,

@@ -29,6 +29,8 @@ use crate::pascal;
 /// bulk connections subscribe to every label. Matching occurs on the emitting
 /// thread before cloning arguments or submitting work to the receiver's shard.
 ///
+/// Default handler bodies are allowed; their unused parameters do not warn.
+///
 /// The interface must be declared at module level: generated items live in a
 /// private submodule, which cannot name items declared inside a function body.
 pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -167,6 +169,12 @@ pub(crate) fn expand(
         method
             .attrs
             .retain(|attr| !attr.path().is_ident("with_label"));
+        // Default handler bodies commonly ignore their payload.
+        if method.default.is_some() {
+            method
+                .attrs
+                .push(syn::parse_quote!(#[allow(unused_variables)]));
+        }
         labels.push(label);
     }
     let item_cfg = crate::attributes::conditions(&trait_item.attrs)?;

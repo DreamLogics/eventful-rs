@@ -35,6 +35,10 @@ pub trait Eventful {
     /// Bind immediately on the named shard's current thread, returning a local reference.
     /// Unlike [`Self::spawn`], this does not queue work or require an async context.
     ///
+    /// The returned reference and its clones and handles are the value's only
+    /// strong owners; the shard collects the value once they are all dropped.
+    /// Connections and Slint bridges hold it weakly, so they stop delivering then.
+    ///
     /// # Errors
     /// Returns [`InvokeError::WrongShard`] outside the named shard's context.
     ///

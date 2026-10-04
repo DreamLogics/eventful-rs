@@ -14,6 +14,11 @@ trait PlatformEvents {
     fn reloaded(&self);
     #[cfg_attr(not(unix), cfg(any()))]
     fn reloaded(&self, path: String);
+    // Defaulted handlers follow the same rules: a disabled one leaves neither a
+    // trait method nor a signal naming its missing payload type.
+    #[cfg(any())]
+    fn removed(&self, value: MissingPayload) {}
+    fn flushed(&self, count: u32) {}
 }
 
 #[eventful(PlatformEvents, shard = Worker)]

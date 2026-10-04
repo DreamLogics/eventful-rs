@@ -22,6 +22,7 @@ use std::{
     thread::{self, ThreadId},
 };
 
+use crate::local_task::LocalSpawner;
 use crate::shard_handle::{ShardValue, Target};
 
 /// A future confined to the shard thread; it need not implement Send.
@@ -41,8 +42,17 @@ pub(crate) enum Command {
 /// Single owner of the shard admission queue.
 pub(crate) type Receiver = mpsc::UnboundedReceiver<Command>;
 
+/// Owner-thread state of one shard: its values and its spawned local tasks.
+#[derive(Default)]
+struct ShardContext {
+    /// Values bound to the shard.
+    store: Rc<RefCell<ShardRcStore>>,
+    /// Local futures awaiting their first poll by the driver.
+    spawner: Rc<LocalSpawner>,
+}
+
 thread_local! {
-    static STORES: RefCell<HashMap<ShardId, Rc<RefCell<ShardRcStore>>>> = RefCell::new(HashMap::new());
+    static STORES: RefCell<HashMap<ShardId, ShardContext>> = RefCell::new(HashMap::new());
 }
 
 /// Whether this thread currently owns any shard stores.
@@ -52,12 +62,17 @@ pub(crate) fn on_shard_thread() -> bool {
 
 /// Access or initialize the thread-local store for a shard identity.
 pub(crate) fn store(id: ShardId) -> Rc<RefCell<ShardRcStore>> {
-    STORES.with(|s| {
-        s.borrow_mut()
-            .entry(id)
-            .or_insert_with(|| Rc::new(RefCell::new(ShardRcStore::new())))
-            .clone()
-    })
+    STORES.with(|s| s.borrow_mut().entry(id).or_default().store.clone())
+}
+
+/// Access or initialize the local task queue for a shard identity.
+pub(crate) fn spawner(id: ShardId) -> Rc<LocalSpawner> {
+    STORES.with(|s| s.borrow_mut().entry(id).or_default().spawner.clone())
+}
+
+/// The selected shard's task queue if this thread owns it; never creates one.
+pub(crate) fn local_spawner(id: ShardId) -> Option<Rc<LocalSpawner>> {
+    STORES.with(|s| s.borrow().get(&id).map(|c| c.spawner.clone()))
 }
 
 /// Removes a shard store on exit, dropping values outside the TLS borrow.
@@ -417,9 +432,7 @@ impl ShardEventHandle {
     where
         T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
     {
-        let store = STORES
-            .with(|stores| stores.borrow().get(&self.shard_id).cloned())
-            .ok_or(InvokeError::WrongShard)?;
+        let store = local_store(self.shard_id).ok_or(InvokeError::WrongShard)?;
         let (id, stored) = store
             .borrow()
             .find_value(value)
@@ -519,6 +532,11 @@ impl EventLoopHandle for ShardEventHandle {
     {
         self.try_spawn(f).expect("shard submission failed");
     }
+}
+
+/// The selected shard's store if this thread owns it; never creates one.
+pub(crate) fn local_store(id: ShardId) -> Option<Rc<RefCell<ShardRcStore>>> {
+    STORES.with(|s| s.borrow().get(&id).map(|c| c.store.clone()))
 }
 
 /// Whether this thread already contains the selected shard store.

@@ -29,6 +29,13 @@ mod slint_events;
 /// each listener's shard. Ordinary emissions do not wait for listeners; tracked
 /// emissions return a future that observes completion and delivery errors.
 ///
+/// Event methods may provide a default handler body, so listeners implement only
+/// the events they care about. Unused parameters in a default body do not warn;
+/// other lints still apply. With receiver roles, each `impl Interface<Role>`
+/// gets its own defaults. Bulk connections still subscribe to every event, so
+/// deliveries to non-overridden handlers are queued and run the default body.
+/// Connect individual signals instead for very high-frequency events.
+///
 /// Mark individual methods with `#[with_label(LabelType)]` to enable routing.
 /// The type must implement `eventful_rs::EventLabel`. Emission builders select
 /// labels with `.labelled(label)`; handler signatures stay unchanged.
