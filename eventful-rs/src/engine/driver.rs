@@ -25,6 +25,21 @@ fn collect(store: &RefCell<ShardRcStore>) {
     drop(retired);
 }
 
+/// Release detached values newest first. Each is destroyed before the next is
+/// released, so a value detached later goes before values it may depend on.
+/// Values still referenced elsewhere are left to ordinary collection.
+fn release_detached(store: &RefCell<ShardRcStore>) {
+    loop {
+        let Some(token) = store.borrow_mut().pop_detached() else {
+            break;
+        };
+        let key = token.key();
+        drop(token);
+        let retired = store.borrow_mut().retire(key);
+        drop(retired); // Destructors may detach or bind; never under the borrow.
+    }
+}
+
 /// Recheck token-free values once callbacks that borrowed them may have finished.
 fn collect_orphans(store: &RefCell<ShardRcStore>) {
     if store.borrow().has_orphans() {
@@ -146,6 +161,7 @@ pub(crate) async fn drive(
     }
     // Drop canceled futures while the context is still on its owner thread.
     drop(pending);
+    release_detached(&context);
     collect(&context);
     handle.request_shutdown();
 }

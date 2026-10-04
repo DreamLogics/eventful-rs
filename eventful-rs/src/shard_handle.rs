@@ -676,6 +676,30 @@ where
     }
 }
 
+impl<T> ShardRcHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    /// Keep the value alive until its shard shuts down; see [`ShardRc::detach`].
+    /// Callable from any thread: off the value's shard, the handle's lifetime
+    /// token is queued to the shard, keeping the value alive in the meantime.
+    /// If the shard no longer accepts work, this only drops the handle.
+    pub fn detach(self) -> ShardWeakHandle<T> {
+        let weak = Self::downgrade(&self);
+        match crate::engine::local_store(self.shard_handle.shard_id) {
+            Some(store) => store.borrow_mut().detach(self.id),
+            None => {
+                let token = self.id;
+                // A closed shard drops the token with the rejected command.
+                let _ = self
+                    .shard_handle
+                    .run(Box::new(move |store| store.borrow_mut().detach(token)));
+            }
+        }
+        weak
+    }
+}
+
 impl<T> ShardWeakHandle<T>
 where
     T: Eventful + HasEvents<T::EventSetType> + 'static,
@@ -739,6 +763,46 @@ where
         let group = crate::ConnectEvents::connect_events(&*this.events, target);
         this.inner.own_connections(group.clone());
         group
+    }
+
+    /// Keep the value alive until its shard shuts down, without an owner to
+    /// store a reference in. Use it for values that live as long as the
+    /// application, such as a main window or a service shared by other values.
+    /// To release a value earlier, keep a [`ShardRcHandle`] instead.
+    ///
+    /// At shutdown, after queued work has drained, detached values are destroyed
+    /// on the shard's thread in reverse detach order: a value detached later,
+    /// which may depend on earlier ones, goes first. A value that something
+    /// else still references at that point is destroyed with the shard's
+    /// remaining values instead. After shutdown, detaching only drops this
+    /// reference.
+    ///
+    /// ```
+    /// use eventful_rs::*;
+    /// declare_shard!(Ui, runtime = main);
+    ///
+    /// #[eventful(shard = Ui)]
+    /// struct MainWindow;
+    ///
+    /// Ui::shard().run_main(|| async {
+    ///     let window = MainWindow::bind_local(MainWindow { events: Default::default() })?;
+    ///     let weak = ShardRc::detach(window);
+    ///     // No strong reference remains, but the shard keeps the window alive.
+    ///     assert!(weak.try_local()?.is_some());
+    ///     Ok::<(), InvokeError>(())
+    /// })?;
+    /// # Ok::<(), InvokeError>(())
+    /// ```
+    pub fn detach(this: Self) -> ShardWeakHandle<T> {
+        let weak = ShardWeakHandle {
+            id: this.id.key(),
+            shard_handle: this.shard_handle.clone(),
+            events: Arc::downgrade(&this.events),
+        };
+        if let Some(store) = crate::engine::local_store(this.shard_handle.shard_id) {
+            store.borrow_mut().detach(this.id.clone());
+        }
+        weak
     }
 
     /// Spawn a future on the value's shard; the caller owns the returned task.

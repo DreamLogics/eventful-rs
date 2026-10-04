@@ -144,6 +144,8 @@ pub(crate) struct ShardRcStore {
     signal: Arc<CollectSignal>,
     /// Token-free keys still borrowed by in-flight callbacks.
     orphans: Vec<usize>,
+    /// Tokens of detached values in detach order, released newest first at shutdown.
+    detached: Vec<ShardRcId>,
 }
 
 impl ShardRcStore {
@@ -159,7 +161,31 @@ impl ShardRcStore {
                 closed: AtomicBool::new(false),
             }),
             orphans: Vec::new(),
+            detached: Vec::new(),
         }
+    }
+
+    /// Keep a value alive until shutdown by retaining one of its tokens.
+    pub(crate) fn detach(&mut self, token: ShardRcId) {
+        self.detached.push(token);
+    }
+
+    /// Take the most recently detached token, if any.
+    pub(crate) fn pop_detached(&mut self) -> Option<ShardRcId> {
+        self.detached.pop()
+    }
+
+    /// Remove a value if nothing else references it, for dropping outside the borrow.
+    pub(crate) fn retire(&mut self, key: usize) -> Option<Rc<dyn Any>> {
+        let stored = self.values.get(&key)?;
+        if stored.entry.tokens.load(Ordering::Acquire) != 0 || Rc::strong_count(&stored.value) != 1
+        {
+            // Still referenced; ordinary collection handles it later.
+            return None;
+        }
+        let stored = self.values.remove(&key)?;
+        self.addresses.remove(&stored.address);
+        Some(stored.value)
     }
 
     /// Collection queue the driver waits on.
@@ -278,5 +304,15 @@ impl Drop for ShardRcStore {
     fn drop(&mut self) {
         // Values drop after this; their releases have no store to collect from.
         self.signal.closed.store(true, Ordering::Release);
+        // Normally released by the driver already. If the driver never finished,
+        // still destroy detached values newest first, before the remaining values.
+        while let Some(token) = self.detached.pop() {
+            let key = token.key();
+            drop(token);
+            if let Some(stored) = self.values.remove(&key) {
+                self.addresses.remove(&stored.address);
+                drop(stored);
+            }
+        }
     }
 }

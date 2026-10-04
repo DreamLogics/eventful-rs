@@ -31,6 +31,17 @@ impl Updates for Listener {
 
 type LocalCallback = Box<dyn Fn(usize)>;
 
+/// Set when the detached root is destroyed.
+static ROOT_DROPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[eventful_rs::eventful(shard = Ui)]
+struct Root;
+impl Drop for Root {
+    fn drop(&mut self) {
+        ROOT_DROPPED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 #[eventful_rs::eventful(shard = Ui)]
 struct CallbackOwner {
     callback: RefCell<Option<LocalCallback>>,
@@ -128,6 +139,13 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
         let _ = task_done.send(std::thread::current().id());
     })
     .unwrap();
+    // A detached root lives until shutdown, which destroys it on the UI thread.
+    let root = ShardRc::detach(
+        ShardRc::try_bind(Root {
+            events: Default::default(),
+        })
+        .unwrap(),
+    );
     let endless = Ui::spawn_local(futures::future::pending::<()>())
         .unwrap()
         .detach();
@@ -306,6 +324,8 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
         shard.shutdown_async().await.unwrap();
         assert!(stopping.elapsed() < Duration::from_secs(1));
         assert!(endless.is_finished());
+        assert!(ROOT_DROPPED.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(root.try_local().err(), Some(InvokeError::WrongShard));
         assert_eq!(Ui::spawn_local(async {}).err(), Some(InvokeError::Closed));
         assert!(matches!(
             ShardRc::try_bind(UiState {

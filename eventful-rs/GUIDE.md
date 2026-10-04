@@ -334,6 +334,15 @@ Net::shard().run_main(|| async {
 reference still never leaves its shard. `ShardWeakHandle::try_local` returns
 `Ok(None)` once the value has been collected.
 
+Some values live as long as the application, such as a main window or a shared
+service, and have no natural owner to hold their reference. `ShardRc::detach(value)`
+hands the value to its shard and returns a [`ShardWeakHandle`] for reaching it;
+`handle.detach()` does the same from any thread. The shard keeps detached values
+alive until it shuts down. Then, after queued work has drained, it destroys them
+on its own thread in reverse detach order, so a service detached after the client
+it uses is destroyed first. To release a value earlier, keep a strong handle
+instead of detaching it.
+
 For callbacks owned by the UI, capture a weak reference instead of cloning the
 window into its own callback:
 
@@ -482,7 +491,8 @@ Store it in the wrapper so it lives as long as the wrapper, and keep the
 wrapper's `ShardRc` alive for as long as the window is open. It is the only
 strong owner, while Slint keeps a shown window alive on its own: dropping the
 `ShardRc`, for example at the end of a setup function, leaves the window on
-screen but silently stops delivering its callbacks. Slint callbacks hold
+screen but silently stops delivering its callbacks. For a window that lives as
+long as the application, `ShardRc::detach(editor)` hands it to the shard. Slint callbacks hold
 only a weak reference to the bridge; dropping the bridge stops forwarding even
 if something else retains its event storage. Already queued events can still run.
 

@@ -14,6 +14,13 @@
   tasks before draining queued work, so endless loops no longer hold it up for
   the grace period. `tokio::task::spawn_local` working on Tokio shards remains an
   implementation detail and is not guaranteed.
+- Added `ShardRc::detach(value)` and `ShardRcHandle::detach()` to keep a value
+  alive until its shard shuts down without storing a reference, for values that
+  live as long as the application. Both return a `ShardWeakHandle`. At shutdown,
+  after queued work drains, detached values are destroyed on the shard's thread
+  in reverse detach order.
+- `Eventful::bind_local` and the Slint bridge guide now point out that the
+  returned `ShardRc` is the value's only strong owner.
 - Event methods in `#[events]` traits may provide default handler bodies; this is
   now documented and tested. Unused parameters in default bodies no longer
   trigger `unused_variables`. Bulk connections still deliver every event.
