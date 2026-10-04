@@ -14,5 +14,5 @@ resolver = "3"
 authors = ["Sanne Ladage", "eventful-rs contributors"]
 version = "0.2.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.98"
 license = "MIT OR Apache-2.0"

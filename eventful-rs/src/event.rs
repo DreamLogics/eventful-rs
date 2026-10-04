@@ -249,10 +249,10 @@ where
         // Dispatch one match behind so the final match can take `args` by value.
         let mut previous = None;
         for connection in snapshot.iter() {
-            if connection.accepts(&label) {
-                if let Some(previous) = previous.replace(connection) {
-                    (previous.emit)(args.clone());
-                }
+            if connection.accepts(&label)
+                && let Some(previous) = previous.replace(connection)
+            {
+                (previous.emit)(args.clone());
             }
         }
         if let Some(last) = previous {

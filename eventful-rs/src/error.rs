@@ -72,7 +72,7 @@ impl ShardId {
     /// Panics if all process-local identities have been allocated.
     pub fn new() -> Self {
         let last_id = LAST_SHARD_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("shard identity space exhausted");
         ShardId(last_id + 1)
     }

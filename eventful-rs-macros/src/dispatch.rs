@@ -72,18 +72,18 @@ impl VisitMut for ReplaceSelf<'_> {
         syn::visit_mut::visit_type_mut(self, ty);
     }
     fn visit_type_path_mut(&mut self, path: &mut syn::TypePath) {
-        if path.path.segments.len() > 1 {
-            if let Some(tokens) = self.qualified(&path.qself, &path.path) {
-                *path = parse_quote!(#tokens);
-            }
+        if path.path.segments.len() > 1
+            && let Some(tokens) = self.qualified(&path.qself, &path.path)
+        {
+            *path = parse_quote!(#tokens);
         }
         syn::visit_mut::visit_type_path_mut(self, path);
     }
     fn visit_expr_path_mut(&mut self, path: &mut syn::ExprPath) {
-        if path.path.segments.len() > 1 {
-            if let Some(tokens) = self.qualified(&path.qself, &path.path) {
-                *path = parse_quote!(#tokens);
-            }
+        if path.path.segments.len() > 1
+            && let Some(tokens) = self.qualified(&path.qself, &path.path)
+        {
+            *path = parse_quote!(#tokens);
         }
         syn::visit_mut::visit_expr_path_mut(self, path);
     }

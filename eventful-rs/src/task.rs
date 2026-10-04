@@ -67,10 +67,10 @@ where
 {
     std::thread::spawn(move || {
         let result = task(ct.clone());
-        if !ct.is_cancelled() {
-            if let Some(result) = result {
-                callback(result);
-            }
+        if !ct.is_cancelled()
+            && let Some(result) = result
+        {
+            callback(result);
         }
     });
 }
