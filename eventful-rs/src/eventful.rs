@@ -13,7 +13,7 @@ pub trait Eventful {
     /// Construct on the designated shard and return a thread-safe handle.
     /// Only the factory's captures must be Send; Self may contain Rc or RefCell.
     /// The designated event loop must be running to complete this operation.
-    /// See the [quick start](crate#quick-start).
+    /// See the [tutorial](crate#tutorial-import-products-and-display-progress).
     ///
     /// # Errors
     /// Returns [`InvokeError`] on shutdown, cancellation, invalid affinity, or

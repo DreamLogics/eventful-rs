@@ -14,6 +14,8 @@
   for a local reference or `ShardRcHandle::try_from_ref(&value)` for a remote handle.
   Both return `Result<_, InvokeError>`: `WrongShard` off the owner thread and
   `ValueMissing` for a value that is not bound. Lookup no longer scans the store.
+- Documentation: corrected stale module names, links, and `ShardRc::connect_to`
+  guidance; the guide's previously ignored snippets now run as doctests.
 
 ## 0.2.0 - 2026-10-01
 

@@ -171,7 +171,7 @@ fn runtime_path() -> syn::Path {
 /// Runtimes are `std`, `main`, `tokio`, `tokio_main`, and `slint`; the last three
 /// require their corresponding runtime features. Calling-thread and UI markers
 /// must first be initialized on their owner thread.
-/// See the [runtime guide](https://docs.rs/eventful-rs/latest/eventful_rs/#quick-start)
+/// See the [tutorial](https://docs.rs/eventful-rs/latest/eventful_rs/#tutorial-import-products-and-display-progress)
 /// for a complete example.
 #[proc_macro]
 pub fn declare_shard(input: TokenStream) -> TokenStream {

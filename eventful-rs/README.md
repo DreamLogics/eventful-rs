@@ -4,7 +4,7 @@
 
 # eventful-rs
 
-> **NOTE:** This project is in it's infancy and is currently in an early exploratory phase. Expect breaking changes.
+> **NOTE:** This project is in its infancy and is currently in an early exploratory phase. Expect breaking changes.
 
 Is your Rust code too boring? Want to spice up your async cravings? Then let's make
 things a little more eventful! Add some events to your structs and connect them together, whether they are living close or a thread away. Sit back and let the magic happen.
@@ -36,8 +36,8 @@ eventful-rs = "0.2"
 The standard thread runtime works without optional features. Enable an adapter
 when your application needs it:
 
-- tokio: enables the Tokio runtime adapter (disabled by default)
-- slint: enables the Slint UI runtime adapter for use in Slint projects.
+- `tokio`: enables the Tokio runtime adapters (`runtime = tokio` and `runtime = tokio_main`).
+- `slint`: enables the Slint UI runtime adapter (`runtime = slint`) for Slint applications.
 
 ## What it offers
 
@@ -61,9 +61,13 @@ for the type definitions, delivery semantics, and lifecycle rules.
 | `cargo run -p targeted-events`       | Topic routing with wildcard observers                     |
 | `cargo run -p example_tokio`         | HTTP I/O on Tokio with a main-thread listener             |
 
-The examples can be found [here](https://github.com/DreamLogics/eventful-rs/tree/main/examples)
-and some extra info for working with this project can be found in [the development guide](https://github.com/DreamLogics/eventful-rs/blob/main/DEVELOPMENT.md)
-. Do note, the event queues are unbounded and async operations may interleave unless you specifically take this into account.
+Run these from the workspace root. The source for each is in the
+[examples directory](https://github.com/DreamLogics/eventful-rs/tree/main/examples).
+Notes for working on eventful-rs itself are in the
+[development guide](https://github.com/DreamLogics/eventful-rs/blob/main/DEVELOPMENT.md).
+
+Keep in mind that event and call queues are unbounded, and async methods on the same
+shard can interleave at each `.await`. Design for both.
 
 ## License
 
