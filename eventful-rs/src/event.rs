@@ -219,7 +219,7 @@ where
         let id = self
             .internal
             .next_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("connection identity space exhausted");
         let record = Arc::new(EventConnectionRecord {
             id,
