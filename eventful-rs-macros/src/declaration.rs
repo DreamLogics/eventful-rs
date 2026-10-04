@@ -30,6 +30,9 @@ impl Parse for Declaration {
         }
         input.parse::<Token![=]>()?;
         let runtime = input.parse()?;
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+        }
         Ok(Self {
             attrs,
             visibility,
@@ -55,11 +58,11 @@ pub(crate) fn declare_shard(input: TokenStream) -> TokenStream {
     let (ty, init) = match backend.to_string().as_str() {
         "std" => (
             quote!(#runtime::std_rt::Shard),
-            quote!(#runtime::std_rt::Shard::new(stringify!(#name))),
+            quote!(#runtime::std_rt::Shard::new(::core::stringify!(#name))),
         ),
         "tokio" => (
             quote!(#runtime::tokio_rt::TokioShard),
-            quote!(#runtime::tokio_rt::TokioShard::new(stringify!(#name))),
+            quote!(#runtime::tokio_rt::TokioShard::new(::core::stringify!(#name))),
         ),
         "main" => (
             quote!(#runtime::local_rt::LocalShard),
@@ -67,7 +70,7 @@ pub(crate) fn declare_shard(input: TokenStream) -> TokenStream {
         ),
         "tokio_main" => (
             quote!(#runtime::tokio_local_rt::TokioLocalShard),
-            quote!(#runtime::tokio_local_rt::TokioLocalShard::new(stringify!(#name))),
+            quote!(#runtime::tokio_local_rt::TokioLocalShard::new(::core::stringify!(#name))),
         ),
         "slint" => (
             quote!(#runtime::slint_rt::SlintShard),
@@ -85,7 +88,16 @@ pub(crate) fn declare_shard(input: TokenStream) -> TokenStream {
     quote! {
         /// Marker for a lazily initialized singleton shard.
         #(#attrs)*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(
+            ::core::fmt::Debug,
+            ::core::clone::Clone,
+            ::core::marker::Copy,
+            ::core::cmp::PartialEq,
+            ::core::cmp::Eq,
+            ::core::cmp::PartialOrd,
+            ::core::cmp::Ord,
+            ::core::hash::Hash,
+        )]
         #visibility enum #name {}
         #(#conditions)*
         impl #name {

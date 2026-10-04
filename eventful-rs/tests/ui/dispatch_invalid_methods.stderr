@@ -1,0 +1,29 @@
+error: dispatched methods cannot declare generic or lifetime parameters
+ --> tests/ui/dispatch_invalid_methods.rs:8:13
+  |
+8 |     fn store<T: Send + 'static>(&self, value: T) {
+  |             ^^^^^^^^^^^^^^^^^^^
+
+error: dispatched methods cannot take `impl Trait` arguments; use a concrete type
+  --> tests/ui/dispatch_invalid_methods.rs:18:27
+   |
+18 |     fn show(&self, value: impl std::fmt::Display + Send + 'static) -> String {
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: a method takes at most one #[action] or #[asynced] annotation
+  --> tests/ui/dispatch_invalid_methods.rs:28:5
+   |
+28 |     #[asynced]
+   |     ^^^^^^^^^^
+
+error: a method takes at most one #[action] or #[asynced] annotation
+  --> tests/ui/dispatch_invalid_methods.rs:37:5
+   |
+37 |     #[action]
+   |     ^^^^^^^^^
+
+error: dispatched method arguments cannot use `@` patterns
+  --> tests/ui/dispatch_invalid_methods.rs:46:25
+   |
+46 |     fn run(&self, value @ 0..=9: u8) {
+   |                         ^

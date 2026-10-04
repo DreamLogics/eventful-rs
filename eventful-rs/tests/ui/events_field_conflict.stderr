@@ -1,0 +1,5 @@
+error: eventful structs reserve the `events` field for generated event storage; rename this field
+ --> tests/ui/events_field_conflict.rs:5:5
+  |
+5 |     events: Vec<u32>,
+  |     ^^^^^^

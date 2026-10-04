@@ -19,6 +19,11 @@ mod slint_events;
 /// Concrete argument types such as `Vec<String>` and `Option<Vec<String>>` are
 /// supported. Traits and methods cannot declare generic parameters (`<T>`).
 ///
+/// Declare interfaces at module level, not inside a function body: generated
+/// items live in a private submodule (which keeps emission access private), and
+/// such a module cannot name items declared inside a function. The method names
+/// `role`, `signals`, and `events` are reserved by the generated API.
+///
 /// Attach it to a source with `#[eventful(Interface)]` and implement it on
 /// listeners. `source.event_name().connect(&listener)` dispatches callbacks on
 /// each listener's shard. Ordinary emissions do not wait for listeners; tracked
@@ -43,6 +48,8 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// bridge in the wrapper and call `bridge.connect_to(&wrapper)` to queue events
 /// on its shard. Callback names map to Slint's `on_*` setters, with matching
 /// argument types. Arguments must implement Clone + Send + 'static.
+/// The same module-level and reserved-name rules as `#[events]` apply, and
+/// `connect_to` is also reserved by the bridge.
 ///
 /// Only callbacks without return values are supported. Installation replaces
 /// existing handlers for the listed callbacks. The bridge does not retain the

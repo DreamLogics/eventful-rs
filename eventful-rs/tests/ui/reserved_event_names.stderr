@@ -1,0 +1,23 @@
+error: event method name `role` is reserved by the generated event API; rename the event
+ --> tests/ui/reserved_event_names.rs:5:8
+  |
+5 |     fn role(&self);
+  |        ^^^^
+
+error: event method name `signals` is reserved by the generated event API; rename the event
+  --> tests/ui/reserved_event_names.rs:10:8
+   |
+10 |     fn signals(&self);
+   |        ^^^^^^^
+
+error: event method name `events` is reserved by the generated event API; rename the event
+  --> tests/ui/reserved_event_names.rs:15:8
+   |
+15 |     fn events(&self);
+   |        ^^^^^^
+
+error: event methods `foo_bar` and `foo__bar` generate the same signal type name
+  --> tests/ui/reserved_event_names.rs:21:8
+   |
+21 |     fn foo__bar(&self);
+   |        ^^^^^^^^

@@ -1,16 +1,22 @@
 //! Queue scheduling, panic isolation, release-driven collection, and shutdown draining.
 use super::{Command, LocalFuture, Receiver, ShardEventHandle, store};
 use crate::shard_handle::ShardRcStore;
-use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
-use std::{cell::RefCell, panic::AssertUnwindSafe, time::Duration};
+use futures::{FutureExt, StreamExt, future::CatchUnwind, stream::FuturesUnordered};
+use std::{any::Any, cell::RefCell, panic::AssertUnwindSafe, time::Duration};
+
+/// A local future whose unwinding panics are caught without another allocation.
+type Guarded = CatchUnwind<AssertUnwindSafe<LocalFuture>>;
 
 /// Isolate unwinding callback panics so the driver can keep processing work.
-fn guarded(future: LocalFuture) -> LocalFuture {
-    Box::pin(async move {
-        if AssertUnwindSafe(future).catch_unwind().await.is_err() {
-            eprintln!("eventful-rs: shard callback panicked");
-        }
-    })
+fn guarded(future: LocalFuture) -> Guarded {
+    AssertUnwindSafe(future).catch_unwind()
+}
+
+/// Report a callback that unwound; the driver keeps processing work.
+fn report(outcome: Result<(), Box<dyn Any + Send>>) {
+    if outcome.is_err() {
+        eprintln!("eventful-rs: shard callback panicked");
+    }
 }
 
 /// Remove first, then drop outside the RefCell borrow: destructors may bind values.
@@ -34,7 +40,7 @@ pub(crate) async fn drive(
     initial: Option<LocalFuture>,
 ) {
     let context = store(handle.shard_id);
-    let mut pending = FuturesUnordered::<LocalFuture>::new();
+    let mut pending = FuturesUnordered::<Guarded>::new();
     if let Some(initial) = initial {
         pending.push(guarded(initial));
     }
@@ -66,9 +72,9 @@ pub(crate) async fn drive(
         let event = {
             let next = async {
                 if pending.is_empty() {
-                    futures::future::pending::<Option<()>>().await
-                } else {
-                    pending.next().await
+                    futures::future::pending::<()>().await
+                } else if let Some(outcome) = pending.next().await {
+                    report(outcome);
                 }
             }
             .fuse();
@@ -80,27 +86,39 @@ pub(crate) async fn drive(
             }
         };
         match event {
+            Next::Command(Some(Command::Run(run))) => {
+                report(std::panic::catch_unwind(AssertUnwindSafe(|| run(&context))));
+                collect_orphans(&context);
+            }
             Next::Command(Some(Command::Job(job))) => {
                 let mut future = guarded(job(context.clone()));
                 // Start in admission order. A Pending operation then interleaves
                 // with later work; a synchronous callback finishes right here.
                 let polled =
-                    futures::future::poll_fn(|cx| std::task::Poll::Ready(future.as_mut().poll(cx)))
+                    futures::future::poll_fn(|cx| std::task::Poll::Ready(future.poll_unpin(cx)))
                         .await;
-                if polled.is_pending() {
-                    pending.push(future);
-                } else {
-                    collect_orphans(&context);
+                match polled {
+                    std::task::Poll::Pending => pending.push(future),
+                    std::task::Poll::Ready(outcome) => {
+                        report(outcome);
+                        collect_orphans(&context);
+                    }
                 }
             }
-            Next::Command(Some(Command::Stop) | None) => break,
+            // Shutdown closed the queue and every accepted command has been taken.
+            Next::Command(None) => break,
             Next::Completed => collect_orphans(&context),
             Next::Collect => collect(&context),
         }
     }
     rx.close();
     {
-        let drain = async { while pending.next().await.is_some() {} }.fuse();
+        let drain = async {
+            while let Some(outcome) = pending.next().await {
+                report(outcome);
+            }
+        }
+        .fuse();
         let deadline = futures_timer::Delay::new(grace).fuse();
         futures::pin_mut!(drain, deadline);
         futures::select! { _ = drain => {}, _ = deadline => {} }

@@ -82,7 +82,8 @@ where
         },
         move |args| {
             let callback = tracked_callback.clone();
-            tracked_handle.try_deferred_upgrade_in_shard(async move |target| callback(target, args))
+            // Unboxed: the event boxes the tracked future exactly once.
+            tracked_handle.deferred_in_shard(async move |target| callback(target, args))
         },
     )
 }

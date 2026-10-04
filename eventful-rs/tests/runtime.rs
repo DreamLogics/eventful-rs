@@ -237,6 +237,76 @@ fn concurrent_joiners_wait_for_actual_completion() {
     assert!(shard.handle().is_closed());
 }
 
+/// Block the shard until the returned sender fires, so later submissions queue up.
+fn hold(handle: &ShardEventHandle) -> mpsc::Sender<()> {
+    let (release, gate) = mpsc::channel::<()>();
+    handle.invoke(move || {
+        let _ = gate.recv();
+    });
+    release
+}
+
+#[test]
+fn queued_strong_handle_calls_keep_their_target_alive() {
+    let shard = std_rt::Shard::new("strong-retention");
+    let (dropped_tx, dropped) = mpsc::channel();
+    let state = shard.bind(move |bind| {
+        let mut state = TestState::new();
+        state.dropped = Some(dropped_tx);
+        bind(state).to_handle()
+    });
+    let release = hold(&shard.handle());
+    let (ran_tx, ran) = mpsc::channel();
+    state.upgrade_in_shard(move |o| {
+        *o.value.borrow_mut() += 1;
+        ran_tx.send(*o.value.borrow()).unwrap();
+    });
+    drop(state); // The queued call, not the caller, now owns the value.
+    release.send(()).unwrap();
+    assert_eq!(ran.recv().unwrap(), 1);
+    dropped.recv().unwrap(); // Collected once the call finished.
+    shard.join().unwrap();
+}
+
+#[test]
+fn synchronous_callback_panics_are_isolated() {
+    let shard = std_rt::Shard::new("sync-panics");
+    let handle = shard.handle();
+    let state = shard.bind(|bind| bind(TestState::new()).to_handle());
+    handle.invoke(|| panic!("expected panic"));
+    state.upgrade_in_shard(|_| panic!("expected panic"));
+    assert_eq!(
+        block_on(handle.try_invoke_tracked(|| panic!("expected panic"))),
+        Err(InvokeError::Panicked)
+    );
+    state.upgrade_in_shard(|o| *o.value.borrow_mut() += 1);
+    assert_eq!(
+        block_on(state.deferred_upgrade_in_shard(async |o| *o.value.borrow())),
+        1
+    );
+    shard.join().unwrap();
+}
+
+#[test]
+fn shutdown_runs_accepted_work_and_rejects_later_submissions() {
+    let shard = std_rt::Shard::new("shutdown-order");
+    let handle = shard.handle();
+    let release = hold(&handle);
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for _ in 0..100 {
+        let count = count.clone();
+        handle.invoke(move || {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+    handle.request_shutdown();
+    assert!(handle.is_closed());
+    assert_eq!(handle.try_invoke(|| {}), Err(InvokeError::Closed));
+    release.send(()).unwrap();
+    shard.join().unwrap();
+    assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 100);
+}
+
 #[test]
 fn deferred_future_outlives_the_submitting_handle() {
     let shard = std_rt::Shard::new("detached-receiver");

@@ -94,13 +94,19 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
                 args.push(pat.ident.clone());
             }
         }
+        if method_name == "connect_to" {
+            return Err(syn::Error::new_spanned(
+                method_name,
+                "event method name `connect_to` is reserved by the generated Slint bridge; rename the event",
+            ));
+        }
         let source = crate::fresh_target(&args);
         registrations.push(quote! {
             #(#cfg)*
             {
                 let #source = ::std::rc::Rc::downgrade(&events);
                 component.#setter(move |#(#args),*| {
-                    if let Some(#source) = #source.upgrade() {
+                    if let ::core::option::Option::Some(#source) = #source.upgrade() {
                         #source.#method_name().emit(#(#args),*);
                     }
                 });
@@ -108,8 +114,8 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
         });
     }
     // Reuse all event validation, signal generation, role dispatch, and cfg handling.
-    let events: proc_macro2::TokenStream =
-        crate::events::events(TokenStream::new(), quote!(#interface).into()).into();
+    // Validation errors stop here so the bridge does not add cascading errors.
+    let events = crate::events::expand(None, interface.clone())?;
     Ok(quote! {
         #events
 
@@ -119,7 +125,7 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
         /// Installing a bridge replaces existing handlers for the declared callbacks.
         /// Dropping an old bridge does not remove handlers installed afterwards.
         #(#item_cfg)*
-        #[derive(Debug)]
+        #[derive(::core::fmt::Debug)]
         #visibility struct #bridge {
             /// A separate local lifetime token prevents retained event storage from
             /// extending callback forwarding after this bridge is dropped.
@@ -132,7 +138,7 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
             /// Handlers are replaced, not chained. Delivery to receivers is queued.
             /// No component or receiver is retained by the installed callbacks.
             #visibility fn new(component: &#component) -> Self {
-                let events = ::std::rc::Rc::new(#emissions::default());
+                let events = ::std::rc::Rc::new(<#emissions as ::core::default::Default>::default());
                 #(#registrations)*
                 Self { events }
             }

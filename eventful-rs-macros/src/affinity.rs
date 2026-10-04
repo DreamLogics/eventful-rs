@@ -64,13 +64,26 @@ pub(crate) fn sharded(attr: TokenStream, item: TokenStream) -> TokenStream {
         .to_compile_error()
         .into();
     };
-    if let Err(error) = apply_scope(items, &shard) {
+    // Resolve the selection once, in the annotated module, so any path form works
+    // (local items, `crate::`, `super::`, or external crates); nested modules
+    // refer to this alias through `super::` chains.
+    let alias = format_ident!("__EventfulScopeShard");
+    if let Err(error) = apply_scope(items, &parse_quote!(self::#alias)) {
         return error.to_compile_error().into();
     }
+    items.insert(
+        0,
+        parse_quote! {
+            #[doc(hidden)]
+            #[allow(dead_code)]
+            type #alias = #shard;
+        },
+    );
     quote!(#module).into()
 }
 
 /// Recursively attach affinity to inline structs, respecting explicit overrides.
+/// `shard` is a path to the scope alias, relative to the current module.
 fn apply_scope(items: &mut [syn::Item], shard: &syn::Path) -> syn::Result<()> {
     for item in items {
         match item {
@@ -106,14 +119,10 @@ fn apply_scope(items: &mut [syn::Item], shard: &syn::Path) -> syn::Result<()> {
                 }
                 if let Some((_, items)) = &mut module.content {
                     let mut nested = shard.clone();
-                    if nested.leading_colon.is_none()
-                        && nested.segments.first().is_some_and(|s| s.ident != "crate")
-                    {
-                        if nested.segments.first().is_some_and(|s| s.ident == "self") {
-                            nested.segments = nested.segments.into_iter().skip(1).collect();
-                        }
-                        nested = parse_quote!(super::#nested);
+                    if nested.segments.first().is_some_and(|s| s.ident == "self") {
+                        nested.segments = nested.segments.into_iter().skip(1).collect();
                     }
+                    let nested = parse_quote!(super::#nested);
                     apply_scope(items, &nested)?;
                 }
             }
@@ -166,6 +175,18 @@ pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     match &mut item.fields {
         syn::Fields::Named(fields) => {
+            if let Some(existing) = fields
+                .named
+                .iter()
+                .find_map(|field| field.ident.as_ref().filter(|ident| *ident == "events"))
+            {
+                return syn::Error::new_spanned(
+                    existing,
+                    "eventful structs reserve the `events` field for generated event storage; rename this field",
+                )
+                .to_compile_error()
+                .into();
+            }
             fields.named.push(syn::parse_quote! {
                 #set_field: #emissions_name
             });
@@ -201,13 +222,12 @@ pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
             /// Empty signal storage for this eventful value.
             /// See [`eventful_rs::eventful`] for construction examples.
             #(#item_cfg)*
-            #[derive(Debug)]
+            #[derive(::core::fmt::Debug)]
             #visibility struct #trait_ident_set {}
 
-            #(#item_cfg)*
             /// Empty source-owned emission access.
             #(#item_cfg)*
-            #[derive(Debug, Default)]
+            #[derive(::core::fmt::Debug, ::core::default::Default)]
             #visibility struct #emissions_name { signals: ::std::sync::Arc<#trait_ident_set> }
             #(#item_cfg)*
             impl #emissions_name {
@@ -215,7 +235,7 @@ pub(crate) fn eventful(attr: TokenStream, item: TokenStream) -> TokenStream {
                 pub fn signals(&self) -> &::std::sync::Arc<#trait_ident_set> { &self.signals }
             }
             #(#item_cfg)*
-            impl Default for #trait_ident_set {
+            impl ::core::default::Default for #trait_ident_set {
                 fn default() -> Self {
                     #trait_ident_set {}
                 }

@@ -28,31 +28,68 @@ use crate::pascal;
 /// when `subscription.matches(&emitted)` returns true. Ordinary `connect` and
 /// bulk connections subscribe to every label. Matching occurs on the emitting
 /// thread before cloning arguments or submitting work to the receiver's shard.
+///
+/// The interface must be declared at module level: generated items live in a
+/// private submodule, which cannot name items declared inside a function body.
 pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let runtime = crate::runtime_path();
     let event_trait: Option<syn::Path> = if attr.is_empty() {
         None
     } else {
         Some(parse_macro_input!(attr as syn::Path))
     };
-    let mut trait_item = parse_macro_input!(item as ItemTrait);
+    let trait_item = parse_macro_input!(item as ItemTrait);
+    match expand(event_trait, trait_item) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+/// Event method names that would collide with generated inherent or trait methods
+/// (`EventSet::role`, `Emissions::signals`, and `HasEvents::events`).
+const RESERVED_METHODS: &[&str] = &["role", "signals", "events"];
+
+/// Expand a parsed event interface; shared with the Slint bridge generator.
+pub(crate) fn expand(
+    event_trait: Option<syn::Path>,
+    mut trait_item: ItemTrait,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let runtime = crate::runtime_path();
     // Include macro arguments and label attributes before removing them below.
     let declaration = quote!(#trait_item #event_trait).to_string();
     if !trait_item.generics.params.is_empty() {
-        return syn::Error::new_spanned(
+        return Err(syn::Error::new_spanned(
             &trait_item.generics,
             "generic event traits are not supported",
-        )
-        .to_compile_error()
-        .into();
+        ));
     }
+    let mut signal_names = std::collections::HashMap::<String, syn::Ident>::new();
     for item in &trait_item.items {
         let TraitItem::Fn(method) = item else {
-            return syn::Error::new_spanned(item, "event traits may only contain methods")
-                .to_compile_error()
-                .into();
+            return Err(syn::Error::new_spanned(
+                item,
+                "event traits may only contain methods",
+            ));
         };
         let sig = &method.sig;
+        let plain_name = sig.ident.to_string();
+        let plain_name = plain_name.strip_prefix("r#").unwrap_or(&plain_name);
+        if RESERVED_METHODS.contains(&plain_name) {
+            return Err(syn::Error::new_spanned(
+                &sig.ident,
+                format!(
+                    "event method name `{plain_name}` is reserved by the generated event API; rename the event"
+                ),
+            ));
+        }
+        if let Some(previous) = signal_names.insert(pascal(plain_name), sig.ident.clone()) {
+            return Err(syn::Error::new_spanned(
+                &sig.ident,
+                format!(
+                    "event methods `{previous}` and `{}` generate the same signal type name",
+                    sig.ident
+                ),
+            ));
+        }
         let error = if !sig.generics.params.is_empty() {
             Some(syn::Error::new_spanned(
                 &sig.generics,
@@ -78,7 +115,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             None
         };
         if let Some(error) = error {
-            return error.to_compile_error().into();
+            return Err(error);
         }
     }
     let mut labels = Vec::new();
@@ -90,14 +127,12 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         for attr in &method.attrs {
             if attr.path().is_ident("with_label") {
                 if label.is_some() {
-                    return syn::Error::new_spanned(attr, "duplicate with_label attribute")
-                        .to_compile_error()
-                        .into();
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "duplicate with_label attribute",
+                    ));
                 }
-                match attr.parse_args::<Type>() {
-                    Ok(ty) => label = Some(ty),
-                    Err(error) => return error.to_compile_error().into(),
-                }
+                label = Some(attr.parse_args::<Type>()?);
             }
         }
         method
@@ -105,10 +140,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             .retain(|attr| !attr.path().is_ident("with_label"));
         labels.push(label);
     }
-    let item_cfg = match crate::attributes::conditions(&trait_item.attrs) {
-        Ok(attrs) => attrs,
-        Err(e) => return e.to_compile_error().into(),
-    };
+    let item_cfg = crate::attributes::conditions(&trait_item.attrs)?;
     let trait_name = &trait_item.ident;
     let visibility = &trait_item.vis;
     let set_name = format_ident!("{}EventSet", trait_name);
@@ -162,12 +194,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             };
             Some(Ok((method_name.clone(), signal_name, names, types, cfg)))
         })
-        .collect::<Result<Vec<_>, syn::Error>>();
-
-    let methods = match methods {
-        Ok(methods) => methods,
-        Err(error) => return error.to_compile_error().into(),
-    };
+        .collect::<Result<Vec<_>, syn::Error>>()?;
 
     // Bulk connections require at least one signal enabled in this build.
     let enabled = methods
@@ -179,11 +206,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
                 .collect::<syn::Result<Vec<_>>>()?;
             Ok(quote!(all(#(#predicates),*)))
         })
-        .collect::<syn::Result<Vec<_>>>();
-    let enabled = match enabled {
-        Ok(enabled) => enabled,
-        Err(error) => return error.to_compile_error().into(),
-    };
+        .collect::<syn::Result<Vec<_>>>()?;
     let bulk_cfg = quote!(#[cfg(any(#(#enabled),*))]);
 
     let module = format_ident!("__eventful_{}", trait_name);
@@ -229,7 +252,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             .map(|i| format_ident!("__eventful_arg_{}", i))
             .collect::<Vec<_>>();
         let args = quote!((#(#types,)*));
-        let bounds = quote!(#(#types: Clone + Send + 'static,)*);
+        let bounds = quote!(#(#types: ::core::clone::Clone + ::core::marker::Send + 'static,)*);
         let state = quote!(#runtime::__builders);
         let initial_label = if label.is_some() {
             quote!(#state::All)
@@ -259,7 +282,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
         aliases.push(quote! { #(#item_cfg)* #(#cfg)* #[allow(unused_imports)] #visibility use #module::{#signal, #emitter}; });
         fields.push(quote!(#(#cfg)* #method: #runtime::Event<#args, #label_alias>));
-        defaults.push(quote!(#(#cfg)* #method: Default::default()));
+        defaults.push(quote!(#(#cfg)* #method: ::core::default::Default::default()));
         signal_accessors.push(quote! {
             #(#cfg)*
             /// Select this signal for subscription.
@@ -290,7 +313,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             #(#cfg)*
             impl<L, D, R> ::core::fmt::Debug for #signal<L, D, R> {
-                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result { f.debug_struct(stringify!(#signal)).finish_non_exhaustive() }
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result { f.debug_struct(::core::stringify!(#signal)).finish_non_exhaustive() }
             }
             #(#cfg)*
             impl<L, D, R> #signal<L, D, R> {
@@ -310,7 +333,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
                 /// Select the receiver's event-interface role.
                 pub fn role<Role: 'static>(self) -> #signal<L, #state::Unselected, #state::Role<Role>> {
-                    #signal { inner: self.inner, label: self.label, destination: self.destination, role: Default::default() }
+                    #signal { inner: self.inner, label: self.label, destination: self.destination, role: ::core::default::Default::default() }
                 }
             }
             #(#cfg)*
@@ -328,7 +351,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             impl<L> #signal<L, #runtime::ShardEventHandle>
             where L: #state::SubscriptionLabel<#label_alias> {
                 /// Register a queued callback. Captures must be Send + Sync.
-                pub fn connect(self, callback: impl Fn(#(#types),*) + Send + Sync + 'static) -> #runtime::Connection<#args, #label_alias>
+                pub fn connect(self, callback: impl ::core::ops::Fn(#(#types),*) + ::core::marker::Send + ::core::marker::Sync + 'static) -> #runtime::Connection<#args, #label_alias>
                 where #bounds {
                     #state::connect_shard(&self.inner, self.label.subscription(), self.destination, move |(#(#dispatch_args,)*)| callback(#(#dispatch_args),*))
                 }
@@ -337,7 +360,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             impl<L, T> #signal<L, #runtime::ShardWeakHandle<T>>
             where L: #state::SubscriptionLabel<#label_alias>, T: #receiver_bound {
                 /// Register a callback receiving the weak receiver and event arguments.
-                pub fn connect(self, callback: impl Fn(&T, #(#types),*) + Send + Sync + 'static) -> #runtime::Connection<#args, #label_alias>
+                pub fn connect(self, callback: impl ::core::ops::Fn(&T, #(#types),*) + ::core::marker::Send + ::core::marker::Sync + 'static) -> #runtime::Connection<#args, #label_alias>
                 where #bounds {
                     #state::connect_receiver(&self.inner, self.label.subscription(), &self.destination, move |target, (#(#dispatch_args,)*)| callback(target, #(#dispatch_args),*))
                 }
@@ -351,7 +374,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             #(#cfg)*
             impl<L, M> ::core::fmt::Debug for #emitter<'_, L, M> {
-                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result { f.debug_struct(stringify!(#emitter)).finish_non_exhaustive() }
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result { f.debug_struct(::core::stringify!(#emitter)).finish_non_exhaustive() }
             }
             #(#cfg)*
             impl<'a, L> #emitter<'a, L> {
@@ -374,18 +397,18 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             #(#cfg)*
             impl #emitter<'_, #state::Selected<#label_alias>, #state::Tracked> {
                 /// Submit immediately; dropping the completion future does not cancel delivery.
-                pub fn emit(self, #(#names: #types),*) -> impl ::core::future::Future<Output = Result<(), #runtime::DeliveryError>> + Send + 'static + use<>
+                pub fn emit(self, #(#names: #types),*) -> impl ::core::future::Future<Output = ::core::result::Result<(), #runtime::DeliveryError>> + ::core::marker::Send + 'static + use<>
                 where #bounds {
                     self.inner.emit_labelled_tracked(self.label.0, (#(#names,)*))
                 }
             }
         });
     }
-    quote! {
+    Ok(quote! {
         #trait_item
         #(#item_cfg)*
         #[doc(hidden)]
-        #visibility trait #receiver_bound: #runtime::Eventful + #runtime::HasEvents<Self::EventSetType> #extra_bound + Sized + 'static {}
+        #visibility trait #receiver_bound: #runtime::Eventful + #runtime::HasEvents<Self::EventSetType> #extra_bound + ::core::marker::Sized + 'static {}
         #(#item_cfg)*
         impl<T> #receiver_bound for T where T: #runtime::Eventful + #runtime::HasEvents<T::EventSetType> #extra_bound + 'static {}
         #(#item_cfg)*
@@ -394,12 +417,12 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             use super::*;
             #(#definitions)*
             /// Subscription-only storage for this event interface.
-            #[derive(Debug)]
+            #[derive(::core::fmt::Debug)]
             pub struct #set_name { #(#fields,)* }
-            impl Default for #set_name { fn default() -> Self { Self { #(#defaults,)* } } }
+            impl ::core::default::Default for #set_name { fn default() -> Self { Self { #(#defaults,)* } } }
             impl #set_name { #(#signal_accessors)* }
             /// Source-owned emission access. Handles retain only its subscription view.
-            #[derive(Debug, Default)]
+            #[derive(::core::fmt::Debug, ::core::default::Default)]
             pub struct #emissions { signals: ::std::sync::Arc<#set_name> }
             impl #emissions {
                 /// Borrow the subscription-only event set.
@@ -430,7 +453,7 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
             #[must_use = "call connect to register subscriptions"]
             pub struct #connections<'a, R> { source: &'a #set_name, role: ::core::marker::PhantomData<fn() -> R> }
             impl<R> ::core::fmt::Debug for #connections<'_, R> {
-                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result { f.debug_struct(stringify!(#connections)).finish_non_exhaustive() }
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result { f.debug_struct(::core::stringify!(#connections)).finish_non_exhaustive() }
             }
             #bulk_cfg
             impl<#role: 'static> #connections<'_, #role> {
@@ -453,5 +476,5 @@ pub(crate) fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
         #[allow(unused_imports)]
         #visibility use #module::{#(#exports),*};
         #(#aliases)*
-    }.into()
+    })
 }

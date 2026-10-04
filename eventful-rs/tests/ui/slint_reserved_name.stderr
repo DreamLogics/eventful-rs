@@ -1,0 +1,11 @@
+error: event method name `connect_to` is reserved by the generated Slint bridge; rename the event
+ --> tests/ui/slint_reserved_name.rs:5:8
+  |
+5 |     fn connect_to(&self);
+  |        ^^^^^^^^^^
+
+error: event methods must be synchronous
+  --> tests/ui/slint_reserved_name.rs:10:5
+   |
+10 |     async fn save(&self);
+   |     ^^^^^^^^^^^^^^^^^^^^

@@ -18,20 +18,25 @@ use std::{
     panic::AssertUnwindSafe,
     pin::Pin,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::Arc,
     thread::{self, ThreadId},
 };
+
+use crate::shard_handle::{ShardValue, Target};
 
 /// A future confined to the shard thread; it need not implement Send.
 pub(crate) type LocalFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
 /// A Send factory producing a local future after crossing the queue.
 type Job = Box<dyn FnOnce(Rc<RefCell<ShardRcStore>>) -> LocalFuture + Send + 'static>;
-/// Messages serialized through the admission queue.
+/// A synchronous operation run to completion on admission; needs no future.
+type Run = Box<dyn FnOnce(&Rc<RefCell<ShardRcStore>>) + Send + 'static>;
+/// Messages serialized through the admission queue. Shutdown closes the queue;
+/// the driver stops after draining every message accepted before that.
 pub(crate) enum Command {
-    /// Construct and start one admitted operation on the owner thread.
+    /// Run one synchronous operation on the owner thread.
+    Run(Run),
+    /// Construct and start one asynchronous operation on the owner thread.
     Job(Job),
-    /// Drain pending operations after all preceding jobs have started.
-    Stop,
 }
 /// Single owner of the shard admission queue.
 pub(crate) type Receiver = mpsc::UnboundedReceiver<Command>;
@@ -105,8 +110,9 @@ impl std::error::Error for InvokeError {}
 pub struct ShardEventHandle {
     /// Stable identity used to validate affinity and look up the owner store.
     pub(crate) shard_id: ShardId,
-    /// Admission lock; taking the sender permanently closes new submissions.
-    pub(crate) sender: Arc<Mutex<Option<mpsc::UnboundedSender<Command>>>>,
+    /// Admission queue. Closing it rejects new submissions without a lock;
+    /// messages accepted earlier are still delivered.
+    pub(crate) sender: Arc<mpsc::UnboundedSender<Command>>,
 }
 impl fmt::Debug for ShardEventHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -122,41 +128,96 @@ impl ShardEventHandle {
         (
             Self {
                 shard_id: ShardId::new(),
-                sender: Arc::new(Mutex::new(Some(tx))),
+                sender: Arc::new(tx),
             },
             rx,
         )
     }
-    /// Serialize admission with shutdown; drop rejected captures outside the lock.
-    pub(crate) fn post(&self, job: Job) -> Result<(), InvokeError> {
-        let command = Command::Job(job);
-        let result = {
-            let tx = self.sender.lock().unwrap_or_else(|e| e.into_inner());
-            match tx.as_ref() {
-                Some(tx) => tx.unbounded_send(command).map_err(|e| e.into_inner()),
-                None => Err(command),
-            }
-        };
-        // Drop captured user values only after releasing the admission lock.
-        result.map_err(|command| {
-            drop(command);
-            InvokeError::Closed
-        })
+    /// Admit a command; a rejected command and its captures are dropped here.
+    fn send(&self, command: Command) -> Result<(), InvokeError> {
+        self.sender
+            .unbounded_send(command)
+            .map_err(|_| InvokeError::Closed)
     }
-    /// Reject new submissions immediately and enqueue shutdown after accepted work.
+    /// Admit an asynchronous operation.
+    pub(crate) fn post(&self, job: Job) -> Result<(), InvokeError> {
+        self.send(Command::Job(job))
+    }
+    /// Admit a synchronous operation, run inline when the driver reaches it.
+    pub(crate) fn run(&self, run: Run) -> Result<(), InvokeError> {
+        self.send(Command::Run(run))
+    }
+    /// Reject new submissions immediately; the driver stops after accepted work.
     pub fn request_shutdown(&self) {
-        let tx = self.sender.lock().unwrap_or_else(|e| e.into_inner()).take();
-        if let Some(tx) = tx {
-            let _ = tx.unbounded_send(Command::Stop);
-        }
+        self.sender.close_channel();
     }
     /// Whether admission has closed or the driver has stopped.
     pub fn is_closed(&self) -> bool {
-        self.sender
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .is_none_or(|s| s.is_closed())
+        self.sender.is_closed()
+    }
+    /// Queue a callback on a value; skipped if the value is gone when it runs.
+    pub(crate) fn run_with<T, F>(&self, target: Target, f: F) -> Result<(), InvokeError>
+    where
+        T: 'static,
+        F: FnOnce(&T) + Send + 'static,
+    {
+        self.run(Box::new(move |store| {
+            let value = store.borrow().get::<ShardValue<T>>(target.key);
+            if let Some(value) = value {
+                f(&value);
+            }
+            drop(target);
+        }))
+    }
+    /// Queue an async callback on a value; skipped if the value is gone when it starts.
+    pub(crate) fn post_with<T, F>(&self, target: Target, f: F) -> Result<(), InvokeError>
+    where
+        T: 'static,
+        F: AsyncFnOnce(&T) -> () + Send + 'static,
+    {
+        self.post(Box::new(move |store| {
+            Box::pin(async move {
+                let value = store.borrow().get::<ShardValue<T>>(target.key);
+                if let Some(value) = value {
+                    f(&value).await;
+                }
+                drop(target);
+            })
+        }))
+    }
+    /// Submit an async callback on a value immediately and observe its result.
+    pub(crate) fn deferred_with<T, F, R>(
+        &self,
+        target: Target,
+        f: F,
+    ) -> impl Future<Output = Result<R, InvokeError>> + Send + 'static + use<T, F, R>
+    where
+        T: 'static,
+        F: AsyncFnOnce(&T) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        let posted = self.post(Box::new(move |store| {
+            Box::pin(async move {
+                let result = AssertUnwindSafe(async move {
+                    let value = store.borrow().get::<ShardValue<T>>(target.key);
+                    let result = match value {
+                        Some(value) => Ok(f(&value).await),
+                        None => Err(InvokeError::ValueMissing),
+                    };
+                    drop(target);
+                    result
+                })
+                .catch_unwind()
+                .await
+                .unwrap_or(Err(InvokeError::Panicked));
+                let _ = tx.send(result);
+            })
+        }));
+        async move {
+            posted?;
+            rx.await.map_err(|_| InvokeError::Canceled)?
+        }
     }
     /// Queue a synchronous callback.
     ///
@@ -166,11 +227,7 @@ impl ShardEventHandle {
     where
         F: FnOnce() + Send + 'static,
     {
-        self.post(Box::new(move |_| {
-            Box::pin(async move {
-                f();
-            })
-        }))
+        self.run(Box::new(move |_| f()))
     }
     /// Submit a receiver-free callback immediately and observe its completion.
     /// Dropping the observer does not cancel accepted work.
@@ -185,12 +242,10 @@ impl ShardEventHandle {
         F: FnOnce() + Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
-        let posted = self.post(Box::new(move |_| {
-            Box::pin(async move {
-                let result = std::panic::catch_unwind(AssertUnwindSafe(callback))
-                    .map_err(|_| InvokeError::Panicked);
-                let _ = tx.send(result);
-            })
+        let posted = self.run(Box::new(move |_| {
+            let result = std::panic::catch_unwind(AssertUnwindSafe(callback))
+                .map_err(|_| InvokeError::Panicked);
+            let _ = tx.send(result);
         }));
         async move {
             posted?;
@@ -240,18 +295,7 @@ impl ShardEventHandle {
         if handle.shard_id() != self.shard_id {
             return Err(InvokeError::WrongShard);
         }
-        self.post(Box::new(move |store| {
-            Box::pin(async move {
-                let value = {
-                    store
-                        .borrow()
-                        .get::<crate::shard_handle::ShardValue<T>>(handle.id())
-                };
-                if let Some(value) = value {
-                    f(&value);
-                }
-            })
-        }))
+        self.run_with(handle.target(), f)
     }
     /// Queue an async callback on a shard-local value, rejecting closed or mismatched shards.
     /// A target that expires before execution is silently skipped.
@@ -268,18 +312,7 @@ impl ShardEventHandle {
         if handle.shard_id() != self.shard_id {
             return Err(InvokeError::WrongShard);
         }
-        self.post(Box::new(move |store| {
-            Box::pin(async move {
-                let value = {
-                    store
-                        .borrow()
-                        .get::<crate::shard_handle::ShardValue<T>>(handle.id())
-                };
-                if let Some(value) = value {
-                    f(&value).await;
-                }
-            })
-        }))
+        self.post_with(handle.target(), f)
     }
     /// Submit immediately and asynchronously receive the result. Dropping the
     /// receiver does not cancel the operation. Weak targets may be missing.
@@ -298,33 +331,13 @@ impl ShardEventHandle {
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        let posted = if handle.shard_id() != self.shard_id {
-            Err(InvokeError::WrongShard)
-        } else {
-            self.post(Box::new(move |store| {
-                Box::pin(async move {
-                    let result = AssertUnwindSafe(async move {
-                        let value = {
-                            store
-                                .borrow()
-                                .get::<crate::shard_handle::ShardValue<T>>(handle.id())
-                        };
-                        match value {
-                            Some(value) => Ok(f(&value).await),
-                            None => Err(InvokeError::ValueMissing),
-                        }
-                    })
-                    .catch_unwind()
-                    .await
-                    .unwrap_or(Err(InvokeError::Panicked));
-                    let _ = tx.send(result);
-                })
-            }))
-        };
+        let delivery =
+            (handle.shard_id() == self.shard_id).then(|| self.deferred_with(handle.target(), f));
         async move {
-            posted?;
-            rx.await.map_err(|_| InvokeError::Canceled)?
+            match delivery {
+                Some(delivery) => delivery.await,
+                None => Err(InvokeError::WrongShard),
+            }
         }
     }
     /// Create an eventful value on its owner thread; usable from any executor.
@@ -346,13 +359,11 @@ impl ShardEventHandle {
         let posted = if T::Shard::shard_id().is_some_and(|id| id != self.shard_id) {
             Err(InvokeError::WrongShard)
         } else {
-            self.post(Box::new(move |store| {
-                Box::pin(async move {
-                    let result =
-                        std::panic::catch_unwind(AssertUnwindSafe(|| bind_here(&store, handle, f)))
-                            .map_err(|_| InvokeError::Panicked);
-                    let _ = tx.send(result);
-                })
+            self.run(Box::new(move |store| {
+                let result =
+                    std::panic::catch_unwind(AssertUnwindSafe(|| bind_here(store, handle, f)))
+                        .map_err(|_| InvokeError::Panicked);
+                let _ = tx.send(result);
             }))
         };
         async move {
@@ -372,13 +383,10 @@ impl ShardEventHandle {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = self.clone();
-        self.post(Box::new(move |store| {
-            Box::pin(async move {
-                let result =
-                    std::panic::catch_unwind(AssertUnwindSafe(|| bind_here(&store, handle, f)))
-                        .map_err(|_| InvokeError::Panicked);
-                let _ = tx.send(result);
-            })
+        self.run(Box::new(move |store| {
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| bind_here(store, handle, f)))
+                .map_err(|_| InvokeError::Panicked);
+            let _ = tx.send(result);
         }))?;
         rx.recv().map_err(|_| InvokeError::Canceled)?
     }

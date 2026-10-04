@@ -1,7 +1,10 @@
 //! Expansion of the main macro family.
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::parse_macro_input;
+
+/// Lint attributes that also apply to the moved body.
+const LINTS: &[&str] = &["allow", "warn", "deny", "forbid", "expect"];
 
 /// Run an async main function on a main-thread shard and join background shards.
 ///
@@ -25,23 +28,40 @@ pub(crate) fn sharded_main(attr: TokenStream, item: TokenStream) -> TokenStream 
             .to_compile_error()
             .into();
     }
-    let attributes = item.attrs.clone();
-    let visibility = item.vis.clone();
     let shard = parse_macro_input!(attr as syn::Path);
+
+    // The wrapper keeps the user's attributes, except `expect`, which belongs to
+    // the body and would be unfulfilled on the wrapper.
+    let (inner_lints, attributes): (Vec<_>, Vec<_>) = item
+        .attrs
+        .drain(..)
+        .partition(|attr| attr.path().is_ident("expect"));
+    let inner_lints = inner_lints
+        .into_iter()
+        .chain(
+            attributes
+                .iter()
+                .filter(|attr| LINTS.iter().any(|name| attr.path().is_ident(name)))
+                .cloned(),
+        )
+        .collect::<Vec<_>>();
+    let visibility = std::mem::replace(&mut item.vis, syn::Visibility::Inherited);
     let mut sig_orig = item.sig.clone();
     sig_orig.asyncness = None;
 
-    let new_ident = format_ident!("{}_sharded_main", item.sig.ident);
+    // Nesting the body keeps it private and avoids sibling-name collisions; the
+    // wrapper's cfg attributes already cover it.
+    let new_ident = quote::format_ident!("__eventful_sharded_main");
     item.sig.ident = new_ident.clone();
+    item.attrs = inner_lints;
 
     quote! {
-        #item
-
         #(#attributes)*
         #visibility #sig_orig {
+            #item
             let result = #shard::shard().run_main(#new_ident);
-            if let Err(e) = #runtime::join_all_shards() {
-                panic!("failed to join background shards: {}", e);
+            if let ::core::result::Result::Err(e) = #runtime::join_all_shards() {
+                ::core::panic!("failed to join background shards: {}", e);
             }
             result
         }

@@ -10,6 +10,7 @@ pub use joined::JoinedHandles;
 
 mod sealed;
 use sealed::Sealed;
+pub(crate) use sealed::Target;
 
 /// Dispatch work to a shard-local value through a thread-safe handle.
 /// See the [calling methods guide](crate#calling-methods).
@@ -319,6 +320,12 @@ where
     fn shard_id(&self) -> crate::ShardId {
         self.shard_handle.shard_id()
     }
+    fn target(&self) -> Target {
+        Target {
+            key: self.id.key(),
+            _retain: Some(self.id.clone()),
+        }
+    }
 }
 
 impl<T> ShardHandle<T> for ShardRcHandle<T>
@@ -329,15 +336,15 @@ where
     where
         F: FnOnce(&T) + Send + 'static,
     {
-        self.shard_handle.invoke_with_handle(self.clone(), task);
+        // A stopped shard skips the callback, as for an expired target.
+        let _ = self.shard_handle.run_with(self.target(), task);
     }
 
     fn upgrade_in_shard_async<F>(&self, task: F)
     where
         F: AsyncFnOnce(&T) -> () + Send + 'static,
     {
-        self.shard_handle
-            .invoke_with_handle_async(self.clone(), task);
+        let _ = self.shard_handle.post_with(self.target(), task);
     }
 
     async fn deferred_upgrade_in_shard<F, R>(&self, task: F) -> R
@@ -345,7 +352,10 @@ where
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.shard_handle.deferred_invoke(self.clone(), task).await
+        self.shard_handle
+            .deferred_with(self.target(), task)
+            .await
+            .expect("deferred shard invocation failed")
     }
 
     /// Make a handle that does not keep the target value alive.
@@ -409,6 +419,12 @@ where
     fn shard_id(&self) -> crate::ShardId {
         self.shard_handle.shard_id()
     }
+    fn target(&self) -> Target {
+        Target {
+            key: self.id,
+            _retain: None,
+        }
+    }
 }
 
 impl<T> ShardWeakHandle<T>
@@ -433,7 +449,19 @@ where
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static,
     {
-        Box::pin(self.shard_handle.try_deferred_invoke(self.clone(), task))
+        Box::pin(self.deferred_in_shard(task))
+    }
+
+    /// Unboxed form of [`Self::try_deferred_upgrade_in_shard`] for internal callers.
+    pub(crate) fn deferred_in_shard<F, R>(
+        &self,
+        task: F,
+    ) -> impl Future<Output = Result<R, crate::InvokeError>> + Send + 'static + use<T, F, R>
+    where
+        F: AsyncFnOnce(&T) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.shard_handle.deferred_with(self.target(), task)
     }
 }
 
@@ -445,15 +473,15 @@ where
     where
         F: FnOnce(&T) + Send + 'static,
     {
-        self.shard_handle.invoke_with_handle(self.clone(), task);
+        // A stopped shard skips the callback, as for an expired target.
+        let _ = self.shard_handle.run_with(self.target(), task);
     }
 
     fn upgrade_in_shard_async<F>(&self, task: F)
     where
         F: AsyncFnOnce(&T) -> () + Send + 'static,
     {
-        self.shard_handle
-            .invoke_with_handle_async(self.clone(), task);
+        let _ = self.shard_handle.post_with(self.target(), task);
     }
 
     async fn deferred_upgrade_in_shard<F, R>(&self, task: F) -> R
@@ -461,7 +489,9 @@ where
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.shard_handle.deferred_invoke(self.clone(), task).await
+        self.deferred_in_shard(task)
+            .await
+            .expect("deferred shard invocation failed")
     }
 
     /// Make a handle that does not keep the target value alive.

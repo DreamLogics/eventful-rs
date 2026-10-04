@@ -82,16 +82,14 @@ macro_rules! joined_upgrades {
             where
                 F: FnOnce(($(&$ty,)+)) + Send + 'static,
             {
-                let handles = self.handles.clone();
-                let _ = self.handles.0.shard_handle.post(Box::new(move |store| {
-                    Box::pin(async move {
-                        let ($($value,)+) = &handles;
-                        $(let $value = { store.borrow().get::<super::ShardValue<$ty>>($value.id()) };)+
-                        if let ($(Some($value),)+) = ($($value,)+) {
-                            task(($(&$value,)+));
-                        }
-                        drop(handles);
-                    })
+                let targets = { let ($($value,)+) = &self.handles; ($($value.target(),)+) };
+                let _ = self.handles.0.shard_handle.run(Box::new(move |store| {
+                    let ($($value,)+) = &targets;
+                    $(let $value = { store.borrow().get::<super::ShardValue<$ty>>($value.key) };)+
+                    if let ($(Some($value),)+) = ($($value,)+) {
+                        task(($(&$value,)+));
+                    }
+                    drop(targets);
                 }));
             }
 
@@ -101,15 +99,15 @@ macro_rules! joined_upgrades {
             where
                 F: AsyncFnOnce(($(&$ty,)+)) -> () + Send + 'static,
             {
-                let handles = self.handles.clone();
+                let targets = { let ($($value,)+) = &self.handles; ($($value.target(),)+) };
                 let _ = self.handles.0.shard_handle.post(Box::new(move |store| {
                     Box::pin(async move {
-                        let ($($value,)+) = &handles;
-                        $(let $value = { store.borrow().get::<super::ShardValue<$ty>>($value.id()) };)+
+                        let ($($value,)+) = &targets;
+                        $(let $value = { store.borrow().get::<super::ShardValue<$ty>>($value.key) };)+
                         if let ($(Some($value),)+) = ($($value,)+) {
                             task(($(&$value,)+)).await;
                         }
-                        drop(handles);
+                        drop(targets);
                     })
                 }));
             }
@@ -134,16 +132,16 @@ macro_rules! joined_upgrades {
                 F: AsyncFnOnce(($(&$ty,)+)) -> R + Send + 'static,
                 R: Send + 'static,
             {
-                let handles = self.handles.clone();
+                let targets = { let ($($value,)+) = &self.handles; ($($value.target(),)+) };
                 let (tx, rx) = oneshot::channel();
                 let posted = self.handles.0.shard_handle.post(Box::new(move |store| {
                     Box::pin(async move {
                         let result = AssertUnwindSafe(async move {
-                            let ($($value,)+) = &handles;
-                            $(let $value = { store.borrow().get::<super::ShardValue<$ty>>($value.id()) }
+                            let ($($value,)+) = &targets;
+                            $(let $value = { store.borrow().get::<super::ShardValue<$ty>>($value.key) }
                                 .ok_or(InvokeError::ValueMissing)?;)+
                             let result = task(($(&$value,)+)).await;
-                            drop(handles);
+                            drop(targets);
                             Ok(result)
                         }).catch_unwind().await.unwrap_or(Err(InvokeError::Panicked));
                         let _ = tx.send(result);

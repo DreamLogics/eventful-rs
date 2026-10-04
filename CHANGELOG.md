@@ -16,6 +16,20 @@
   `ValueMissing` for a value that is not bound. Lookup no longer scans the store.
 - Documentation: corrected stale module names, links, and `ShardRc::connect_to`
   guidance; the guide's previously ignored snippets now run as doctests.
+- Cheaper delivery: queued calls no longer clone the target handle, synchronous
+  callbacks run without allocating a future, admission no longer takes a lock,
+  and tracked and deferred calls box their futures once.
+- Macros: generated code fully qualifies prelude items, so user items named
+  `Result`, `Default`, `Clone`, etc. no longer break expansion.
+  - Dispatched methods now accept `mut`/`ref` parameters and `Self` in signatures,
+    and forward `deprecated`, `must_use`, and lint attributes.
+  - Clear errors for reserved event names (`role`, `signals`, `events`), a user
+    `events` field, generic or `impl Trait` dispatched methods, and duplicate
+    `#[action]`/`#[asynced]` markers.
+  - `declare_shard!` accepts a trailing comma; `#[sharded]` accepts paths
+    through external crates; `#[sharded_main]` keeps its body private, so it no
+    longer clashes with a sibling `<name>_sharded_main` or `#[no_mangle]`.
+  - `#[events]` traits must be declared at module level (now documented).
 
 ## 0.2.0 - 2026-10-01
 
