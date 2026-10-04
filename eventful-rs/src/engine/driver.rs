@@ -1,4 +1,4 @@
-//! Queue scheduling, panic isolation, periodic collection, and shutdown draining.
+//! Queue scheduling, panic isolation, release-driven collection, and shutdown draining.
 use super::{Command, LocalFuture, Receiver, ShardEventHandle, store};
 use crate::shard_handle::ShardRcStore;
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
@@ -19,6 +19,13 @@ fn collect(store: &RefCell<ShardRcStore>) {
     drop(retired);
 }
 
+/// Recheck token-free values once callbacks that borrowed them may have finished.
+fn collect_orphans(store: &RefCell<ShardRcStore>) {
+    if store.borrow().has_orphans() {
+        collect(store);
+    }
+}
+
 /// Start jobs in admission order, poll local futures, then drain with a grace period.
 pub(crate) async fn drive(
     mut rx: Receiver,
@@ -31,7 +38,9 @@ pub(crate) async fn drive(
     if let Some(initial) = initial {
         pending.push(guarded(initial));
     }
-    let mut gc = futures_timer::Delay::new(Duration::from_millis(100)).fuse();
+    // Collection is driven by token releases rather than polling, so an idle
+    // shard stays asleep.
+    let signal = context.borrow().signal();
     enum Next {
         Command(Option<Command>),
         Completed,
@@ -67,7 +76,7 @@ pub(crate) async fn drive(
             futures::select! {
                 command = rx.next().fuse() => Next::Command(command),
                 _ = next => Next::Completed,
-                _ = gc => Next::Collect,
+                _ = futures::future::poll_fn(|cx| signal.poll_candidates(cx)).fuse() => Next::Collect,
             }
         };
         match event {
@@ -80,14 +89,13 @@ pub(crate) async fn drive(
                         .await;
                 if polled.is_pending() {
                     pending.push(future);
+                } else {
+                    collect_orphans(&context);
                 }
             }
             Next::Command(Some(Command::Stop) | None) => break,
-            Next::Completed => {}
-            Next::Collect => {
-                collect(&context);
-                gc = futures_timer::Delay::new(Duration::from_millis(100)).fuse();
-            }
+            Next::Completed => collect_orphans(&context),
+            Next::Collect => collect(&context),
         }
     }
     rx.close();

@@ -286,8 +286,8 @@ available if the wrapped value has a method with the same name. The existing
 Use `ShardRc::downgrade(&window)` for a local weak reference and `.upgrade()` to
 recover an optional local strong reference synchronously. These references cannot
 cross threads. Existing `ShardWeakHandle` remains the weak handle for queued access.
-The store collects unused values periodically, so weak upgrades can succeed until
-collection occurs. A local strong reference can also keep a value alive after
+The shard collects a value soon after its last strong reference is released and
+any in-flight callbacks on it finish, so weak upgrades can succeed until then. A local strong reference can also keep a value alive after
 shard shutdown; upgrading it does not restart event delivery.
 
 For callbacks owned by the UI, capture a weak reference instead of cloning the
@@ -420,7 +420,6 @@ for tracked delivery outcomes.
 | **Action**                | A method marked `#[action]` that a handle queues immediately without waiting for a result. The method must return `()`.                                                                                                     |
 | **Runtime backend**       | The implementation that drives a shard, such as the standard thread runtime, Tokio, or Slint's UI loop.                                                                                                                     |
 
-
 ## Distinguishing sources and connecting methods
 
 `#[events]` adds a defaulted role parameter to the listener trait. The producer
@@ -487,7 +486,6 @@ All these methods return the existing connection tokens or groups. Dropping a
 plain token leaves the subscription active; use `disconnect()` or retain a
 `scoped()` guard for cleanup. Tracked emission waits for selected callbacks to
 finish and reports dispatch failures or panics.
-
 
 ## Emission and subscription builders (0.2)
 

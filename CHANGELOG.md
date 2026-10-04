@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Shards now collect a value as soon as its last strong reference is released and
+  in-flight callbacks on it finish, instead of polling every 100 ms. Idle shards,
+  including the Slint UI thread, no longer wake periodically. Weak receivers whose
+  strong handles were all dropped now expire promptly rather than up to 100 ms later.
+- Emissions share the subscription list instead of copying it, and the last
+  matching subscriber receives the original payload instead of a clone.
+- Fixed unbounded growth of the shard registry for joined shards, and of
+  value-owned connection lists after repeated connect/disconnect.
+- **Breaking:** removed `Eventful::as_rc_handle`. Use `ShardRc::try_from_ref(&value)`
+  for a local reference or `ShardRcHandle::try_from_ref(&value)` for a remote handle.
+  Both return `Result<_, InvokeError>`: `WrongShard` off the owner thread and
+  `ValueMissing` for a value that is not bound. Lookup no longer scans the store.
+
 ## 0.2.0 - 2026-10-01
 
 - Added `#[slint_events(component = Ui)]` to generate a typed callback bridge.

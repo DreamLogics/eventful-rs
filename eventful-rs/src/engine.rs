@@ -4,7 +4,7 @@ pub(crate) use driver::drive;
 
 use crate::{
     EventLoopHandle, Eventful, HasEvents, ShardAffinity, ShardHandle, ShardId, ShardRc,
-    ShardRcHandle, ShardRcStore, Sharded,
+    ShardRcStore,
 };
 use futures::{
     FutureExt,
@@ -400,15 +400,23 @@ impl ShardEventHandle {
         self.bind_blocking_factory(f).expect("shard binding failed")
     }
 
-    /// Check if this value lives in the shard store, if so, return a handle to it.
-    /// Returns None outside the owner thread's context or for an unregistered value.
-    pub(crate) fn try_get_handle<T>(&self, value: &T) -> Option<ShardRcHandle<T>>
+    /// Recover a local strong reference to a value stored in this shard.
+    ///
+    /// # Errors
+    /// [`InvokeError::WrongShard`] outside the owner thread's context, or
+    /// [`InvokeError::ValueMissing`] if `value` is not stored in this shard.
+    pub(crate) fn find_local<T>(&self, value: &T) -> Result<ShardRc<T>, InvokeError>
     where
         T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
     {
-        let store = STORES.with(|stores| stores.borrow().get(&self.shard_id).cloned())?;
-        let (id, stored) = store.borrow().find_value(value)?;
-        Some(ShardRc::new(id, stored, self.clone()).to_handle())
+        let store = STORES
+            .with(|stores| stores.borrow().get(&self.shard_id).cloned())
+            .ok_or(InvokeError::WrongShard)?;
+        let (id, stored) = store
+            .borrow()
+            .find_value(value)
+            .ok_or(InvokeError::ValueMissing)?;
+        Ok(ShardRc::new(id, stored, self.clone()))
     }
 }
 

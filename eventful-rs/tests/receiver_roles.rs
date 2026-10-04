@@ -222,12 +222,14 @@ fn local_bulk_roles_disconnect_when_source_value_dies() {
     let destination = std_rt::Shard::new("owned-role-target");
     let log = Arc::new(Mutex::new(Vec::new()));
     let receiver = dialog(&destination, log.clone());
+    // Connections hold the receiver weakly; keep it alive for the whole test.
+    let target = receiver.clone();
     let (local, token) = Local::shard().run_main(move || async move {
         let local = ShardRc::try_bind(LocalButton {
             events: Default::default(),
         })
         .unwrap();
-        let token = ShardRc::role::<A>(&local).connect(&receiver);
+        let token = ShardRc::role::<A>(&local).connect(&target);
         (local, token)
     });
     let events = local.events().clone();
@@ -237,6 +239,7 @@ fn local_bulk_roles_disconnect_when_source_value_dies() {
     assert_eq!(events.clicked().connection_count(), 0);
     assert_eq!(*log.lock().unwrap(), ["A"]);
     token.disconnect();
+    drop(receiver);
     destination.join().unwrap();
 }
 

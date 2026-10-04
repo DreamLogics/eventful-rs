@@ -156,7 +156,8 @@ where
 }
 
 /// Weak shard-local reference. It is neither Send nor Sync and does not keep the value alive.
-/// Values remain upgradeable until the shard collects them; collection is periodic.
+/// Values remain upgradeable until the shard collects them. The shard collects a
+/// value soon after its last strong reference is released and in-flight callbacks finish.
 /// A surviving local strong reference also permits upgrades after shard shutdown.
 pub struct ShardWeak<T>
 where
@@ -165,7 +166,7 @@ where
     /// Weak reference to the local allocation.
     inner: std::rc::Weak<ShardValue<T>>,
     /// Weak lifetime token shared with remote strong handles.
-    id: std::sync::Weak<usize>,
+    id: std::sync::Weak<store::StoreEntry>,
     /// Submission handle, which does not retain the value.
     shard_handle: crate::ShardEventHandle,
 }
@@ -198,11 +199,10 @@ where
 {
     /// Upgrade synchronously if the local allocation is still alive.
     pub fn upgrade(&self) -> Option<ShardRc<T>> {
+        let inner = self.inner.upgrade()?;
         Some(ShardRc::new(
-            ShardRcId {
-                id: self.id.upgrade()?,
-            },
-            self.inner.upgrade()?,
+            ShardRcId::upgrade(&self.id)?,
+            inner,
             self.shard_handle.clone(),
         ))
     }
@@ -216,7 +216,7 @@ where
     pub fn downgrade(this: &Self) -> ShardWeak<T> {
         ShardWeak {
             inner: Rc::downgrade(&this.inner),
-            id: Arc::downgrade(&this.id.id),
+            id: this.id.downgrade(),
             shard_handle: this.shard_handle.clone(),
         }
     }
@@ -314,7 +314,7 @@ where
     T: Eventful + HasEvents<T::EventSetType> + Sized + 'static,
 {
     fn id(&self) -> usize {
-        *self.id.id
+        self.id.key()
     }
     fn shard_id(&self) -> crate::ShardId {
         self.shard_handle.shard_id()
@@ -354,7 +354,7 @@ where
         T: Eventful + HasEvents<<T as Eventful>::EventSetType> + Sized + 'static,
     {
         ShardWeakHandle {
-            id: *self.id.id,
+            id: self.id.key(),
             shard_handle: self.shard_handle.clone(),
             events: Arc::downgrade(&self.events),
         }
@@ -520,6 +520,63 @@ where
             handle,
             |bind| bind(value),
         ))
+    }
+
+    /// Recover a local strong reference from a reference to a bound value,
+    /// such as `&self` inside a method. Lookup is by identity, not equality.
+    ///
+    /// ```
+    /// use eventful_rs::*;
+    /// declare_shard!(Ui, runtime = main);
+    ///
+    /// #[eventful(shard = Ui)]
+    /// struct Window;
+    /// impl Window {
+    ///     fn this(&self) -> ShardRc<Self> {
+    ///         ShardRc::try_from_ref(self).expect("bound on its shard")
+    ///     }
+    /// }
+    ///
+    /// Ui::shard().run_main(|| async {
+    ///     let window = Window::bind_local(Window { events: Default::default() })?;
+    ///     assert!(std::ptr::eq(&*window.this(), &*window));
+    ///     // A value that was never bound has no shard entry.
+    ///     let unbound = Window { events: Default::default() };
+    ///     assert_eq!(ShardRc::try_from_ref(&unbound).err(), Some(InvokeError::ValueMissing));
+    ///     Ok::<(), InvokeError>(())
+    /// })?;
+    /// # Ok::<(), InvokeError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns [`crate::InvokeError::WrongShard`] outside the named shard's
+    /// context, or [`crate::InvokeError::ValueMissing`] if `value` is not stored
+    /// in that shard (for example, a value that was never bound).
+    ///
+    /// # Panics
+    /// A custom shard binding may panic while obtaining its singleton handle.
+    pub fn try_from_ref(value: &T) -> Result<Self, crate::InvokeError> {
+        <T::Shard as crate::ShardBinding>::handle().find_local(value)
+    }
+}
+
+impl<T> ShardRcHandle<T>
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+    T::Shard: crate::ShardBinding,
+{
+    /// Recover a strong remote handle from a reference to a bound value.
+    /// Must run on the value's shard; see [`ShardRc::try_from_ref`].
+    ///
+    /// # Errors
+    /// Returns [`crate::InvokeError::WrongShard`] outside the named shard's
+    /// context, or [`crate::InvokeError::ValueMissing`] if `value` is not stored
+    /// in that shard.
+    ///
+    /// # Panics
+    /// A custom shard binding may panic while obtaining its singleton handle.
+    pub fn try_from_ref(value: &T) -> Result<Self, crate::InvokeError> {
+        ShardRc::try_from_ref(value).map(|local| local.to_handle())
     }
 }
 impl<T> HasEvents<T::EventSetType> for ShardRc<T>
@@ -688,7 +745,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ShardRc")
-            .field("id", &self.id.id)
+            .field("id", &self.id.key())
             .field("shard", &self.shard_handle.shard_id())
             .finish_non_exhaustive()
     }
@@ -700,7 +757,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ShardRcHandle")
-            .field("id", &self.id.id)
+            .field("id", &self.id.key())
             .field("shard", &self.shard_handle.shard_id())
             .finish_non_exhaustive()
     }
