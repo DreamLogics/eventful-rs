@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "connect-all"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "assert_cmd",
  "eventful-rs",
@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "eventful-rs"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "eventful-rs-macros",
  "futures",
@@ -426,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "eventful-rs-macros"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
