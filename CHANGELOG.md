@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 - 2026-10-04
 
 - Shards now collect a value as soon as its last strong reference is released and
   in-flight callbacks on it finish, instead of polling every 100 ms. Idle shards,
