@@ -62,7 +62,13 @@ pub(crate) fn expand(
             "generic event traits are not supported",
         ));
     }
-    let mut signal_names = std::collections::HashMap::<String, syn::Ident>::new();
+    // Signal type names declared so far, with each declaration's cfg predicate.
+    let mut signal_names = Vec::<(String, syn::Ident, Option<Vec<syn::Meta>>)>::new();
+    // Collisions between conditional declarations, reported only in builds enabling both.
+    let mut collisions = Vec::new();
+    // Per method, cfg guards that skip generating its items when an earlier
+    // colliding declaration is also enabled, leaving only the collision error.
+    let mut guards = Vec::<Vec<syn::Attribute>>::new();
     for item in &trait_item.items {
         let TraitItem::Fn(method) = item else {
             return Err(syn::Error::new_spanned(
@@ -81,15 +87,38 @@ pub(crate) fn expand(
                 ),
             ));
         }
-        if let Some(previous) = signal_names.insert(pascal(plain_name), sig.ident.clone()) {
-            return Err(syn::Error::new_spanned(
-                &sig.ident,
-                format!(
-                    "event methods `{previous}` and `{}` generate the same signal type name",
-                    sig.ident
-                ),
-            ));
+        let signal_name = pascal(plain_name);
+        let predicates = crate::attributes::conditions(&method.attrs)?
+            .iter()
+            .map(|attr| crate::attributes::predicate(&attr.meta))
+            .collect::<syn::Result<Vec<_>>>()?;
+        let predicates = (!predicates.is_empty()).then_some(predicates);
+        let mut guard = Vec::new();
+        for (name, previous, previous_predicates) in &signal_names {
+            if *name != signal_name {
+                continue;
+            }
+            let message = format!(
+                "event methods `{previous}` and `{}` generate the same signal type name",
+                sig.ident
+            );
+            // Mutually exclusive conditional declarations are valid; only rustc can
+            // evaluate cfg predicates, so defer the error to builds enabling both.
+            match (previous_predicates, &predicates) {
+                (None, None) => return Err(syn::Error::new_spanned(&sig.ident, message)),
+                (previous_predicates, predicates) => {
+                    let all = previous_predicates.iter().chain(predicates).flatten();
+                    collisions.push(quote::quote_spanned! {sig.ident.span()=>
+                        #[cfg(all(#(#all),*))]
+                        ::core::compile_error!(#message);
+                    });
+                    let previous = previous_predicates.iter().flatten();
+                    guard.push(syn::parse_quote!(#[cfg(not(all(#(#previous),*)))]));
+                }
+            }
         }
+        signal_names.push((signal_name, sig.ident.clone(), predicates));
+        guards.push(guard);
         let error = if !sig.generics.params.is_empty() {
             Some(syn::Error::new_spanned(
                 &sig.generics,
@@ -141,6 +170,9 @@ pub(crate) fn expand(
         labels.push(label);
     }
     let item_cfg = crate::attributes::conditions(&trait_item.attrs)?;
+    let collisions = collisions
+        .iter()
+        .map(|collision| quote!(#(#item_cfg)* #collision));
     let trait_name = &trait_item.ident;
     let visibility = &trait_item.vis;
     let set_name = format_ident!("{}EventSet", trait_name);
@@ -163,7 +195,8 @@ pub(crate) fn expand(
     let methods = trait_item
         .items
         .iter()
-        .filter_map(|item| {
+        .zip(guards)
+        .filter_map(|(item, guard)| {
             let TraitItem::Fn(method) = item else {
                 return None;
             };
@@ -189,7 +222,7 @@ pub(crate) fn expand(
                 }
             }
             let cfg = match crate::attributes::conditions(&method.attrs) {
-                Ok(attrs) => attrs,
+                Ok(attrs) => attrs.into_iter().chain(guard).collect::<Vec<_>>(),
                 Err(e) => return Some(Err(e)),
             };
             Some(Ok((method_name.clone(), signal_name, names, types, cfg)))
@@ -406,6 +439,7 @@ pub(crate) fn expand(
     }
     Ok(quote! {
         #trait_item
+        #(#collisions)*
         #(#item_cfg)*
         #[doc(hidden)]
         #visibility trait #receiver_bound: #runtime::Eventful + #runtime::HasEvents<Self::EventSetType> #extra_bound + ::core::marker::Sized + 'static {}
