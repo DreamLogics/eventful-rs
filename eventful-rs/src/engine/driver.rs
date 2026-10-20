@@ -1,6 +1,6 @@
 //! Queue scheduling, panic isolation, release-driven collection, and shutdown draining.
 use super::{Command, LocalFuture, Receiver, ShardEventHandle, spawner, store};
-use crate::shard_handle::ShardRcStore;
+use crate::{ShardId, shard_handle::ShardRcStore};
 use futures::{FutureExt, StreamExt, future::CatchUnwind, stream::FuturesUnordered};
 use std::{any::Any, cell::RefCell, panic::AssertUnwindSafe, time::Duration};
 
@@ -13,9 +13,9 @@ fn guarded(future: LocalFuture) -> Guarded {
 }
 
 /// Report a callback that unwound; the driver keeps processing work.
-fn report(outcome: Result<(), Box<dyn Any + Send>>) {
-    if outcome.is_err() {
-        eprintln!("eventful-rs: shard callback panicked");
+fn report(shard_id: ShardId, outcome: Result<(), Box<dyn Any + Send>>) {
+    if let Err(payload) = outcome {
+        crate::report::report(shard_id, &*payload);
     }
 }
 
@@ -55,7 +55,8 @@ pub(crate) async fn drive(
     grace: Duration,
     initial: Option<LocalFuture>,
 ) {
-    let context = store(handle.shard_id);
+    let shard_id = handle.shard_id;
+    let context = store(shard_id);
     let mut pending = FuturesUnordered::<Guarded>::new();
     if let Some(initial) = initial {
         pending.push(guarded(initial));
@@ -93,7 +94,7 @@ pub(crate) async fn drive(
                 if pending.is_empty() {
                     futures::future::pending::<()>().await
                 } else if let Some(outcome) = pending.next().await {
-                    report(outcome);
+                    report(shard_id, outcome);
                 }
             }
             .fuse();
@@ -101,7 +102,7 @@ pub(crate) async fn drive(
                 if local_tasks.is_empty() {
                     futures::future::pending::<()>().await
                 } else if let Some(outcome) = local_tasks.next().await {
-                    report(outcome);
+                    report(shard_id, outcome);
                 }
             }
             .fuse();
@@ -116,7 +117,10 @@ pub(crate) async fn drive(
         };
         match event {
             Next::Command(Some(Command::Run(run))) => {
-                report(std::panic::catch_unwind(AssertUnwindSafe(|| run(&context))));
+                report(
+                    shard_id,
+                    std::panic::catch_unwind(AssertUnwindSafe(|| run(&context))),
+                );
                 collect_orphans(&context);
             }
             Next::Command(Some(Command::Job(job))) => {
@@ -129,7 +133,7 @@ pub(crate) async fn drive(
                 match polled {
                     std::task::Poll::Pending => pending.push(future),
                     std::task::Poll::Ready(outcome) => {
-                        report(outcome);
+                        report(shard_id, outcome);
                         collect_orphans(&context);
                     }
                 }
@@ -151,7 +155,7 @@ pub(crate) async fn drive(
     {
         let drain = async {
             while let Some(outcome) = pending.next().await {
-                report(outcome);
+                report(shard_id, outcome);
             }
         }
         .fuse();

@@ -54,6 +54,8 @@ pub use registry::join_all_shards;
 #[cfg(feature = "tokio")]
 pub use registry::join_all_shards_async;
 pub(crate) use registry::register_shard;
+mod report;
+pub use report::{CallbackPanic, set_panic_reporter};
 mod background;
 mod main_loop;
 

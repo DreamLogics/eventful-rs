@@ -24,6 +24,11 @@ mod slint_events;
 /// such a module cannot name items declared inside a function. The method names
 /// `role`, `signals`, and `events` are reserved by the generated API.
 ///
+/// For `trait Interface`, the public items `InterfaceEventSet` (subscription
+/// view), `InterfaceEmissions` (emission access: `Default`, one builder per
+/// event, and `signals()`), and `InterfaceSignalsExt` are stable. Custom sources
+/// own an `InterfaceEmissions` and implement `HasEvents<InterfaceEventSet>`.
+///
 /// Attach it to a source with `#[eventful(Interface)]` and implement it on
 /// listeners. `source.event_name().connect(&listener)` dispatches callbacks on
 /// each listener's shard. Ordinary emissions do not wait for listeners; tracked

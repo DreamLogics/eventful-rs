@@ -254,6 +254,21 @@ A few rules matter as your application grows:
   your application needs before returning from `main`. For manual lifecycle
   management, see [`EventLoop`] and [`join_all_shards`].
 
+A panic in a callback, dispatched method, or local task does not stop its shard.
+The driver isolates it and prints `eventful-rs: shard callback panicked` to stderr.
+Applications that own the terminal, such as TUIs, can send these reports
+elsewhere with [`set_panic_reporter`]. The standard panic hook still runs where
+the panic happened; replace it with [`std::panic::set_hook`] if it also writes
+to the terminal.
+
+```rust
+use eventful_rs::*;
+set_panic_reporter(|panic| {
+    // Write to a log file or an in-app log view instead.
+    let _ = (panic.shard_id(), panic.message());
+});
+```
+
 ## When you need another runtime
 
 The example uses `std` for a background thread and `main` for the calling thread.
@@ -665,6 +680,54 @@ labels, and receiver bounds can be resolved from that module. Public types and
 signal extension traits are re-exported with the interface's visibility. There
 is no generated emitter extension trait. The low-level `Event` type remains
 available for applications explicitly owning raw event storage.
+
+### Building custom event sources
+
+The type of the `events` field is part of the public API: for an interface
+`Keys`, `#[events]` generates `KeysEmissions` with the interface's visibility.
+It implements `Default`, has one emission builder per event
+(`emissions.pressed().emit(key)`), and `signals()` returns its
+subscription view, `&Arc<KeysEventSet>`. Any type that owns a `KeysEmissions`
+can act as an event source by implementing `HasEvents<KeysEventSet>`
+with `signals()` and adding the `KeysSignalsExt` signal accessors. This is how
+the Slint bridge and input adapters for other UI libraries forward external
+callbacks into typed events:
+
+```rust
+use eventful_rs::*;
+use std::sync::Arc;
+
+mod keys {
+    #[eventful_rs::events]
+    pub trait Keys {
+        fn pressed(&self, key: char);
+    }
+}
+use keys::{KeysEmissions, KeysEventSet, KeysSignalsExt};
+
+#[derive(Default)]
+struct KeyBridge {
+    events: KeysEmissions,
+}
+impl KeyBridge {
+    /// Report synchronously whether a key was bound; delivery is queued.
+    fn dispatch(&self, key: char) -> bool {
+        self.events.pressed().emit(key);
+        true
+    }
+}
+impl HasEvents<KeysEventSet> for KeyBridge {
+    fn events(&self) -> &Arc<KeysEventSet> {
+        self.events.signals()
+    }
+}
+impl KeysSignalsExt for KeyBridge {}
+# fn main() {}
+```
+
+Receivers connect with `bridge.pressed().connect(&receiver)` or, for every
+event, `bridge.events().role::<()>().connect(&receiver)`. Keep emission
+access private to the adapter, just like the `events` field of an eventful source.
 
 ## Where to go next
 
