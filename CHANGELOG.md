@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 - 2026-10-20
 
 - Added `set_panic_reporter` and `CallbackPanic` to route panics isolated by shard
   drivers (callbacks, dispatched methods, local tasks) away from the default stderr
@@ -9,7 +9,6 @@
 - Documented the generated `{Interface}Emissions`, `{Interface}EventSet`, and
   `{Interface}SignalsExt` items as a stable contract for custom event sources and
   third-party UI bridges.
-
 - Added `ShardRcHandle::try_local` and `ShardWeakHandle::try_local` to recover a
   local `ShardRc` synchronously from a handle when already running on the value's
   shard, instead of queuing a `deferred_upgrade_in_shard` job.
