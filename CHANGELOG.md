@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3 - 2026-11-24
+
+- The `slint` feature now requires Slint 1.19.
+
 ## 0.2.2 - 2026-10-20
 
 - Added `set_panic_reporter` and `CallbackPanic` to route panics isolated by shard
