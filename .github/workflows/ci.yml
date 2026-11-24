@@ -9,7 +9,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -17,20 +17,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: ./scripts/check.sh
         env:
           SKIP_UI_TESTS: "1"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: documentation
           path: target/doc
   ui:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Keep this version in sync with scripts/check-ui.sh.
       - uses: dtolnay/rust-toolchain@1.100.0
       - name: Install Slint build dependencies
@@ -41,7 +41,7 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
       - run: cargo check -p eventful-rs --lib --locked
       - run: cargo check -p eventful-rs --lib --features tokio --locked
