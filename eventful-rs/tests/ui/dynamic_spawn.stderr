@@ -7,8 +7,9 @@ error[E0277]: the trait bound `eventful_rs::DynamicShard: ShardBinding` is not s
 note: required by a bound in `eventful_rs::Eventful::spawn`
  --> src/eventful.rs
   |
+  | pub trait Eventful {
+...
   |     fn spawn<F>(
-  |        ----- required by a bound in this associated function
 ...
   |         Self::Shard: ShardBinding,
   |                      ^^^^^^^^^^^^ required by this bound in `Eventful::spawn`
@@ -22,5 +23,7 @@ error[E0277]: the trait bound `eventful_rs::DynamicShard: ShardBinding` is not s
 note: required by a bound in `eventful_rs::Eventful::spawn::{anon_assoc#0}`
  --> src/eventful.rs
   |
+  | pub trait Eventful {
+...
   |         Self::Shard: ShardBinding,
   |                      ^^^^^^^^^^^^ required by this bound in `Eventful::spawn::{anon_assoc#0}`

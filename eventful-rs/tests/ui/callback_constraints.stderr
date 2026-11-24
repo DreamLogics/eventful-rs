@@ -42,7 +42,6 @@ note: required by a bound in `ButtonsClickedSignal::<L>::with_receiver`
   --> tests/ui/callback_constraints.rs:4:7
    |
  3 | #[events(ListenerKind)]
-   | ----------------------- required by a bound in this associated function
  4 | trait Buttons { fn clicked(&self, value: usize); }
    |       ^^^^^^^ required by this bound in `ButtonsClickedSignal::<L>::with_receiver`
    = note: this error originates in the attribute macro `eventful` which comes from the expansion of the attribute macro `events` (in Nightly builds, run with -Z macro-backtrace for more info)

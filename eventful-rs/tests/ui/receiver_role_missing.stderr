@@ -41,8 +41,9 @@ note: required for `ButtonsEventSet` to implement `ConnectEventsAs<Dialog, B>`
 note: required by a bound in `RoleConnections::<'_, eventful_rs::ShardRcHandle<T>, Role>::connect`
   --> src/shard_handle.rs
    |
+   | impl<T, Role: 'static> RoleConnections<'_, ShardRcHandle<T>, Role>
+...
    |     pub fn connect<U>(self, target: &impl Sharded<U>) -> crate::ConnectionGroup
-   |            ------- required by a bound in this associated function
 ...
    |         T::EventSetType: crate::ConnectEventsAs<U, Role>,
    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RoleConnections::<'_, ShardRcHandle<T>, Role>::connect`

@@ -49,6 +49,7 @@ struct CallbackOwner {
 }
 
 slint::slint! {
+    #[edition = "1.19"]
     export component BridgeTestUi inherits Window {
         callback save();
         callback edit-paragraph(string, int);

@@ -24,8 +24,9 @@ note: required for `UpdatesEventSet` to implement `ConnectEvents<Listener>`
 note: required by a bound in `eventful_rs::ShardRcHandle::<T>::connect`
  --> src/shard_handle.rs
   |
+  | impl<T> ShardRcHandle<T>
+...
   |     pub fn connect<U, S>(&self, target: &S) -> crate::ConnectionGroup
-  |            ------- required by a bound in this associated function
 ...
   |         T::EventSetType: crate::ConnectEvents<U>,
   |                          ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `ShardRcHandle::<T>::connect`

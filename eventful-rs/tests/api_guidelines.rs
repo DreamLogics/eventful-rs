@@ -165,7 +165,8 @@ fn qualified_types_and_restricted_wrapper_visibility_work() {
 declare_shard!(
     /// An unavailable backend must not be referenced when the marker is disabled.
     #[cfg_attr(all(), cfg_attr(all(), cfg(any())))]
-    Disabled, runtime = slint
+    Disabled,
+    runtime = slint
 );
 
 #[events]

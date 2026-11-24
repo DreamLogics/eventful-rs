@@ -39,14 +39,14 @@ tokio = { version = "1.53", features = [
     "macros",
     "net",
 ], optional = true }
-slint = { version = "1.18", default-features = false, features = [
+slint = { version = "1.19", default-features = false, features = [
     "std",
     "compat-1-2",
 ], optional = true }
 
 [dev-dependencies]
 # Headless component adapter for the Slint callback integration test.
-i-slint-renderer-software = "1.18"
+i-slint-renderer-software = "1.19"
 trybuild = "1"
 
 [package.metadata.docs.rs]

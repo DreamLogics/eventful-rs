@@ -464,6 +464,7 @@ names map to Slint setters: `edit_paragraph` installs `on_edit_paragraph`.
 # mod example {
 use eventful_rs::*;
 slint::slint! {
+    #[edition = "1.19"]
     export component EditorUi inherits Window {
         callback save();
         callback edit-paragraph(string);

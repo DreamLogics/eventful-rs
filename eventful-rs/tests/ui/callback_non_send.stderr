@@ -9,11 +9,11 @@ error[E0277]: `Rc<i32>` cannot be sent between threads safely
    |                                             required by a bound introduced by this call
    |
    = help: within `{closure@$DIR/tests/ui/callback_non_send.rs:11:53: 11:61}`, the trait `Send` is not implemented for `Rc<i32>`
-note: required because it's used within this closure
-  --> tests/ui/callback_non_send.rs:11:53
+note: required because `capture` is used within this closure
+  --> tests/ui/callback_non_send.rs:11:69
    |
 11 |     button.clicked().with_receiver(&dialog).connect(move |_| { drop(capture.clone()); });
-   |                                                     ^^^^^^^^
+   |                                                                     ^^^^^^^
 note: required by a bound in `ButtonsClickedSignal::<L, ShardWeakHandle<T>>::connect`
   --> tests/ui/callback_non_send.rs:3:1
    |
@@ -32,11 +32,11 @@ error[E0277]: `Rc<i32>` cannot be shared between threads safely
    |                                             required by a bound introduced by this call
    |
    = help: within `{closure@$DIR/tests/ui/callback_non_send.rs:11:53: 11:61}`, the trait `Sync` is not implemented for `Rc<i32>`
-note: required because it's used within this closure
-  --> tests/ui/callback_non_send.rs:11:53
+note: required because `capture` is used within this closure
+  --> tests/ui/callback_non_send.rs:11:69
    |
 11 |     button.clicked().with_receiver(&dialog).connect(move |_| { drop(capture.clone()); });
-   |                                                     ^^^^^^^^
+   |                                                                     ^^^^^^^
 note: required by a bound in `ButtonsClickedSignal::<L, ShardWeakHandle<T>>::connect`
   --> tests/ui/callback_non_send.rs:3:1
    |
