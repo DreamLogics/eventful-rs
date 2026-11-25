@@ -1,0 +1,40 @@
+error: the `weak_callback_or_else!` fallback takes fewer arguments than the callback
+ --> tests/ui/weak_callback_arity.rs:7:12
+  |
+7 |     on_key(weak_callback_or_else!(app, |app, _text, _ctrl| (), |_text| ()));
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `$crate::__weak_callback` which comes from the expansion of the macro `weak_callback_or_else` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: the `weak_callback_or_else!` fallback takes more arguments than the callback
+ --> tests/ui/weak_callback_arity.rs:8:12
+  |
+8 |     on_key(weak_callback_or_else!(app, |app, _text, _ctrl| (), |_, _, _| ()));
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `$crate::__weak_callback` which comes from the expansion of the macro `weak_callback_or_else` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: the `weak_callback_or_else!` fallback takes fewer arguments than the callback
+ --> tests/ui/weak_callback_arity.rs:9:12
+  |
+9 |     on_key(weak_callback_or_else!(app, |app, _text, _ctrl| (), || ()));
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `$crate::__weak_callback` which comes from the expansion of the macro `weak_callback_or_else` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> tests/ui/weak_callback_arity.rs:11:51
+   |
+11 |     on_key(weak_callback!(app, |app, text, _ctrl| text.len()));
+   |                                                   ^^^^^^^^^^- help: consider using a semicolon here: `;`
+   |                                                   |
+   |                                                   expected `()`, found `usize`
+
+error[E0593]: closure is expected to take 2 arguments, but it takes 1 argument
+  --> tests/ui/weak_callback_arity.rs:13:5
+   |
+13 |     on_key(weak_callback!(app, |app, _text| ()));
+   |     ^^^^^^^------------------------------------^
+   |     |      |
+   |     |      takes 1 argument
+   |     expected closure that takes 2 arguments

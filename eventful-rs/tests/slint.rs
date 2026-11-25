@@ -56,6 +56,116 @@ slint::slint! {
     }
 }
 
+slint::slint! {
+    #[edition = "1.19"]
+    export component WeakCallbackUi inherits Window {
+        callback save();
+        callback rename(string);
+        callback key-pressed(string, bool, bool);
+        callback wide(int, int, int, int, int, int, int, int, int, int, int, int, int);
+        callback scale(int, int) -> int;
+        callback count() -> int;
+    }
+}
+
+#[eventful_rs::eventful(shard = Ui)]
+struct CallbackApp {
+    log: Rc<RefCell<Vec<String>>>,
+    factor: i32,
+}
+impl CallbackApp {
+    fn record(&self, entry: String) {
+        self.log.borrow_mut().push(entry);
+    }
+}
+
+/// Wait until the shard has collected the value behind `weak`.
+async fn wait_for_collection<T>(weak: &eventful_rs::ShardWeak<T>)
+where
+    T: Eventful + HasEvents<T::EventSetType> + 'static,
+{
+    let collected = async {
+        while weak.upgrade().is_some() {
+            futures_timer::Delay::new(Duration::from_millis(10)).await;
+        }
+    };
+    futures::pin_mut!(collected);
+    let deadline = futures_timer::Delay::new(Duration::from_secs(2));
+    assert!(matches!(
+        futures::future::select(collected, deadline).await,
+        futures::future::Either::Left(_)
+    ));
+}
+
+/// The callback macros go straight into generated `on_*` setters of any arity.
+async fn weak_callback_macros_fit_slint_setters() {
+    use eventful_rs::{weak_callback, weak_callback_or_else};
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let app = CallbackApp::bind_local(CallbackApp {
+        log: log.clone(),
+        factor: 3,
+        events: Default::default(),
+    })
+    .unwrap();
+    let ui = WeakCallbackUi::new().unwrap();
+    ui.on_save(weak_callback!(app, |app| app.record("save".into())));
+    ui.on_rename(weak_callback!(app, |app, name| app.record(format!("rename {name}"))));
+    // Annotations and `_` patterns are accepted.
+    ui.on_key_pressed(weak_callback!(app, |app, text, ctrl: bool, _| {
+        app.record(format!("key {text} {ctrl}"))
+    }));
+    ui.on_wide(weak_callback!(app, |app,
+                                    a,
+                                    b,
+                                    c,
+                                    d,
+                                    e,
+                                    f,
+                                    g,
+                                    h,
+                                    i,
+                                    j,
+                                    k,
+                                    l,
+                                    m| {
+        let sum = a + b + c + d + e + f + g + h + i + j + k + l + m;
+        app.record(format!("wide {sum}"));
+    }));
+    ui.on_scale(weak_callback_or_else!(
+        app,
+        |app, value, offset| value * app.factor + offset,
+        |value, _| -value,
+    ));
+    ui.on_count(weak_callback_or_else!(
+        app,
+        |app: &ShardRc<CallbackApp>| app.log.borrow().len() as i32,
+        || -1
+    ));
+
+    ui.invoke_save();
+    ui.invoke_rename("draft".into());
+    ui.invoke_key_pressed("k".into(), true, false);
+    ui.invoke_wide(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
+    assert_eq!(ui.invoke_scale(4, 1), 13);
+    assert_eq!(ui.invoke_count(), 4);
+    assert_eq!(
+        *log.borrow(),
+        ["save", "rename draft", "key k true", "wide 91"]
+    );
+
+    // The callbacks hold no strong reference, so the value is still collected.
+    let weak = ShardRc::downgrade(&app);
+    drop(app);
+    wait_for_collection(&weak).await;
+    ui.invoke_save();
+    ui.invoke_rename("ignored".into());
+    ui.invoke_key_pressed("x".into(), false, false);
+    ui.invoke_wide(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+    assert_eq!(log.borrow().len(), 4); // Expired callbacks are skipped.
+    assert_eq!(ui.invoke_scale(4, 1), -4);
+    assert_eq!(ui.invoke_count(), -1);
+}
+
 #[eventful_rs::slint_events(component = BridgeTestUi)]
 trait UiActions {
     fn save(&self);
@@ -300,6 +410,7 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
         callback(42); // Expired unit callbacks are skipped.
         assert_eq!(result_callback(()), 99);
         assert!(weak.clone().upgrade().is_none());
+        weak_callback_macros_fit_slint_setters().await;
         let bound = ShardRc::try_bind(UiState {
             value: Rc::new(17),
             events: Default::default(),

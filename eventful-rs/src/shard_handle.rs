@@ -246,6 +246,11 @@ where
     /// Use `()` for no arguments and a tuple for multiple arguments. The callback
     /// receives a local strong reference for the duration of the call.
     /// Capturing another strong reference to this value defeats weak ownership.
+    ///
+    /// For Slint `on_*` setters and other callbacks taking zero or several
+    /// arguments, use [`weak_callback!`](crate::weak_callback!) instead: it
+    /// produces a closure with one parameter per argument, so it can be passed to
+    /// the setter directly.
     pub fn weak_callback<A, F>(&self, callback: F) -> impl Fn(A) + 'static
     where
         F: Fn(&ShardRc<T>, A) + 'static,
@@ -260,6 +265,10 @@ where
 
     /// Create a synchronous callback with an explicit fallback for an expired value.
     /// Use `()` for no arguments and a tuple for multiple arguments.
+    ///
+    /// For Slint `on_*` setters, use
+    /// [`weak_callback_or_else!`](crate::weak_callback_or_else!) instead, which
+    /// takes the arguments as they are.
     pub fn weak_callback_or_else<A, R, F, G>(
         &self,
         callback: F,

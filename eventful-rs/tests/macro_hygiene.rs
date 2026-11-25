@@ -92,6 +92,35 @@ mod shadowed {
     }
 }
 
+/// Weak callback macros used where `Option`, `Some`, and `None` mean something else.
+mod shadowed_callbacks {
+    #![allow(dead_code, non_snake_case, non_upper_case_globals)]
+    use super::shadowed::Source;
+    use eventful_rs::ShardRc;
+
+    pub struct Option;
+    pub fn Some<T>(_: T) {}
+    pub const None: () = ();
+
+    pub fn check(source: &ShardRc<Source>) {
+        // Local names in the body must not collide with the macro's own bindings.
+        let __eventful_weak = 1;
+        let __eventful_value = 2;
+        let __eventful_arg = 3;
+        let add = eventful_rs::weak_callback!(source, |source, a, (b, c)| {
+            source.value.set(source.value.get() + a + b + c);
+            assert_eq!(__eventful_weak + __eventful_value + __eventful_arg, 6);
+        });
+        add(1, (2, 3));
+        let read = eventful_rs::weak_callback_or_else!(
+            source,
+            |source, _: u32| source.value.get(),
+            |_| 0,
+        );
+        assert_eq!(read(0), 11);
+    }
+}
+
 #[eventful_rs::sharded(shard = eventful_rs::DynamicShard)]
 mod scoped {
     #[eventful_rs::eventful]
@@ -137,6 +166,10 @@ fn generated_code_ignores_shadowed_prelude_names() {
     let legacy = futures::executor::block_on(source.legacy());
     assert_eq!(legacy, 5);
     assert_eq!(futures::executor::block_on(source.ignore(0)), 5);
+    let handle = source.clone();
+    futures::executor::block_on(source.deferred_upgrade_in_shard(async move |_| {
+        shadowed_callbacks::check(&handle.try_local().unwrap());
+    }));
 
     drop(source);
     Worker::shard().join().unwrap();
