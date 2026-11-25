@@ -1,0 +1,17 @@
+error: `#[asynced]` method `count` generates the fallible handle method `try_count`, which collides with the `#[asynced]` method `try_count`; rename one of them or mark `count` with `#[asynced(no_try)]`
+ --> tests/ui/asynced_try_collision.rs:8:8
+  |
+8 |     fn count(&self) -> usize {
+  |        ^^^^^
+
+error: `#[asynced]` method `reset` generates the fallible handle method `try_reset`, which collides with the `#[action]` method `try_reset`; rename one of them or mark `reset` with `#[asynced(no_try)]`
+  --> tests/ui/asynced_try_collision.rs:24:8
+   |
+24 |     fn reset(&self) {}
+   |        ^^^^^
+
+error: unsupported `#[asynced]` option; expected `no_try`
+  --> tests/ui/asynced_try_collision.rs:31:15
+   |
+31 |     #[asynced(no_retry)]
+   |               ^^^^^^^^

@@ -130,6 +130,21 @@ pub fn action(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// queues the call on the value's shard; awaiting it returns the method's result.
 /// This does not wait for untracked events emitted by the method. Await tracked
 /// emissions inside the method when listener completion is part of its work.
+///
+/// The handle wrapper panics if the call cannot be delivered: the shard is
+/// closed, the target is gone, the call was canceled, or the method panicked.
+/// For every method `name`, a fallible `try_name` wrapper is generated as well.
+/// It returns `Result<R, InvokeError>` instead of panicking, so callers that may
+/// outlive the shard or the target can handle these failures:
+///
+/// ```text
+/// let n = handle.count().await;      // panics if the shard has closed
+/// let n = handle.try_count().await?; // Err(InvokeError::Closed) instead
+/// ```
+///
+/// A `try_name` that collides with another `#[asynced]` or `#[action]` method in
+/// the same impl is a compile error. Write `#[asynced(no_try)]` to skip the
+/// fallible wrapper for a method.
 #[proc_macro_attribute]
 pub fn asynced(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item

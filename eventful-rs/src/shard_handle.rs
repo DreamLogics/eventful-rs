@@ -44,9 +44,25 @@ where
     /// the callback may still be pending when this returns.
     ///
     /// # Panics
-    /// Panics if the result cannot be delivered; use the weak handle
-    /// [`ShardWeakHandle::try_deferred_upgrade_in_shard`] for fallible dispatch.
+    /// Panics if the result cannot be delivered or the callback panics; use
+    /// [`Self::try_deferred_upgrade_in_shard`] for fallible dispatch.
     async fn deferred_upgrade_in_shard<F, R>(&self, task: F) -> R
+    where
+        F: AsyncFnOnce(&T) -> R + Send + 'static,
+        R: Send + 'static;
+
+    /// Submit a callback immediately and observe its result, including delivery failures.
+    ///
+    /// Dropping the returned future does not cancel the submitted job. Untracked
+    /// events emitted by the callback may still be pending when it completes.
+    ///
+    /// # Errors
+    /// Returns [`crate::InvokeError`] for a closed shard, expired or mismatched
+    /// target, canceled callback, or an unwinding panic in the callback.
+    fn try_deferred_upgrade_in_shard<F, R>(
+        &self,
+        task: F,
+    ) -> futures::future::BoxFuture<'static, Result<R, crate::InvokeError>>
     where
         F: AsyncFnOnce(&T) -> R + Send + 'static,
         R: Send + 'static;
@@ -378,6 +394,17 @@ where
             .expect("deferred shard invocation failed")
     }
 
+    fn try_deferred_upgrade_in_shard<F, R>(
+        &self,
+        task: F,
+    ) -> futures::future::BoxFuture<'static, Result<R, crate::InvokeError>>
+    where
+        F: AsyncFnOnce(&T) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        Box::pin(self.shard_handle.deferred_with(self.target(), task))
+    }
+
     /// Make a handle that does not keep the target value alive.
     fn downgrade(&self) -> ShardWeakHandle<T>
     where
@@ -512,6 +539,18 @@ where
         self.deferred_in_shard(task)
             .await
             .expect("deferred shard invocation failed")
+    }
+
+    fn try_deferred_upgrade_in_shard<F, R>(
+        &self,
+        task: F,
+    ) -> futures::future::BoxFuture<'static, Result<R, crate::InvokeError>>
+    where
+        F: AsyncFnOnce(&T) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        // Same as the inherent method, which method-call syntax prefers.
+        ShardWeakHandle::try_deferred_upgrade_in_shard(self, task)
     }
 
     /// Make a handle that does not keep the target value alive.

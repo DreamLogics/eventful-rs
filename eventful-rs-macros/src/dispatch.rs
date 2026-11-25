@@ -128,12 +128,14 @@ fn forwarded_attributes(method: &ImplItemFn) -> Vec<Attribute> {
         .collect()
 }
 
-/// Validate one annotated method and build its trait signature and implementation.
+/// Validate one annotated method and build its trait signatures and implementations.
+/// `fallible` names the `try_` wrapper generated alongside an `#[asynced]` method.
 fn dispatched(
     runtime: &syn::Path,
     struct_type: &Type,
     method: &ImplItemFn,
     kind: Kind,
+    fallible: Option<syn::Ident>,
 ) -> syn::Result<(proc_macro2::TokenStream, proc_macro2::TokenStream)> {
     let sig = &method.sig;
     if !matches!(sig.receiver(), Some(r) if matches!(r.kind, syn::ReceiverKind::Reference(_, _, None)))
@@ -191,7 +193,10 @@ fn dispatched(
     let target_ident = fresh_target(&method_arg_names);
     let is_async = sig.asyncness.is_some();
     let forwarded = forwarded_attributes(method);
-    let (doc, body) = match kind {
+    // Each entry is one generated handle method: its summary line, doc sections
+    // placed after the forwarded method docs, signature, and body.
+    let mut generated = Vec::new();
+    match kind {
         Kind::Action => {
             if matches!(&sig.output, syn::ReturnType::Type(_, ty)
                 if !matches!(&**ty, Type::Tuple(tuple) if tuple.elems.is_empty()))
@@ -215,10 +220,12 @@ fn dispatched(
                     });
                 }
             };
-            (
+            generated.push((
                 quote!(#[doc = " Queue this method on the value's shard without waiting."]),
+                quote!(),
+                trait_sig,
                 body,
-            )
+            ));
         }
         Kind::Asynced => {
             trait_sig.asyncness = Some(syn::token::Async::default());
@@ -232,30 +239,121 @@ fn dispatched(
                     #call
                 }).await
             };
-            (
+            let Some(try_name) = fallible else {
+                generated.push((
+                    quote!(#[doc = " Await this method on the value's shard; panics on dispatch failure."]),
+                    quote!(),
+                    trait_sig,
+                    body,
+                ));
+                return Ok(emit(&cfg, &forwarded, method, generated));
+            };
+            let panics = format!(
+                " Panics if the call cannot be delivered or the method panics; \
+                 [`Self::{try_name}`] returns an `InvokeError` instead."
+            );
+            let mut try_sig = trait_sig.clone();
+            try_sig.ident = try_name;
+            let output = match &trait_sig.output {
+                syn::ReturnType::Default => quote!(()),
+                syn::ReturnType::Type(_, ty) => quote!(#ty),
+            };
+            try_sig.output =
+                parse_quote!(-> ::core::result::Result<#output, #runtime::InvokeError>);
+            let try_body = quote! {
+                #runtime::ShardHandle::try_deferred_upgrade_in_shard(self, async move |#target_ident| {
+                    #call
+                }).await
+            };
+            let see = format!(" Fallible form of [`Self::{method_name}`].");
+            generated.push((
                 quote!(#[doc = " Await this method on the value's shard; panics on dispatch failure."]),
+                quote! {
+                    #[doc = ""]
+                    #[doc = " # Panics"]
+                    #[doc = #panics]
+                },
+                trait_sig,
                 body,
-            )
+            ));
+            generated.push((
+                quote! {
+                    #[doc = " Await this method on the value's shard, returning dispatch failures."]
+                    #[doc = #see]
+                },
+                quote! {
+                    #[doc = ""]
+                    #[doc = " # Errors"]
+                    #[doc = " Returns `InvokeError` if the shard is closed, the target is missing or \
+                              belongs to another shard, the call is canceled, or the method panics."]
+                },
+                try_sig,
+                try_body,
+            ));
         }
-    };
-    let signature = quote! {
-        #doc
-        #(#cfg)*
-        #(#forwarded)*
-        #trait_sig;
-    };
+    }
+    Ok(emit(&cfg, &forwarded, method, generated))
+}
+
+/// Combine generated handle methods into trait declarations and implementations,
+/// forwarding the original method's conditions and attributes to each.
+fn emit(
+    cfg: &[Attribute],
+    forwarded: &[Attribute],
+    method: &ImplItemFn,
+    generated: Vec<(
+        proc_macro2::TokenStream,
+        proc_macro2::TokenStream,
+        syn::Signature,
+        proc_macro2::TokenStream,
+    )>,
+) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     // Forwarding to a deprecated original is not a new use of it.
     let allow_deprecated = method
         .attrs
         .iter()
         .any(|attr| attr.path().is_ident("deprecated"))
         .then(|| quote!(#[allow(deprecated)]));
-    let implementation = quote! {
-        #(#cfg)*
-        #allow_deprecated
-        #trait_sig { #body }
-    };
-    Ok((signature, implementation))
+    let mut signatures = proc_macro2::TokenStream::new();
+    let mut implementations = proc_macro2::TokenStream::new();
+    for (summary, sections, trait_sig, body) in generated {
+        signatures.extend(quote! {
+            #summary
+            #(#cfg)*
+            #(#forwarded)*
+            #sections
+            #trait_sig;
+        });
+        implementations.extend(quote! {
+            #(#cfg)*
+            #allow_deprecated
+            #trait_sig { #body }
+        });
+    }
+    (signatures, implementations)
+}
+
+/// Parse `#[asynced]` options, returning whether a fallible `try_` wrapper is generated.
+fn generates_try(attr: &Attribute) -> syn::Result<bool> {
+    match &attr.meta {
+        syn::Meta::Path(_) => Ok(true),
+        syn::Meta::List(_) => {
+            let mut generate = true;
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("no_try") {
+                    generate = false;
+                    Ok(())
+                } else {
+                    Err(meta.error("unsupported `#[asynced]` option; expected `no_try`"))
+                }
+            })?;
+            Ok(generate)
+        }
+        syn::Meta::NameValue(_) => Err(syn::Error::new_spanned(
+            attr,
+            "unsupported `#[asynced]` option; expected `#[asynced]` or `#[asynced(no_try)]`",
+        )),
+    }
 }
 
 /// Expand a parsed inherent impl into the original impl plus the handle trait.
@@ -281,8 +379,7 @@ fn expand(
     let struct_name = &type_path.path.segments.last().unwrap().ident;
     let trait_name = format_ident!("{}Async", struct_name);
 
-    let mut signatures = Vec::new();
-    let mut implementations = Vec::new();
+    let mut annotated = Vec::new();
     for member in &item.items {
         let syn::ImplItem::Fn(method) = member else {
             continue;
@@ -291,7 +388,7 @@ fn expand(
             .attrs
             .iter()
             .filter_map(|attr| kind(attr).map(|kind| (attr, kind)));
-        let Some((_, kind)) = annotations.next() else {
+        let Some((attr, kind)) = annotations.next() else {
             continue;
         };
         if let Some((extra, _)) = annotations.next() {
@@ -300,7 +397,39 @@ fn expand(
                 "a method takes at most one #[action] or #[asynced] annotation",
             ));
         }
-        let (signature, implementation) = dispatched(&runtime, struct_type, method, kind)?;
+        let fallible = (kind == Kind::Asynced && generates_try(attr)?)
+            .then(|| format_ident!("try_{}", method.sig.ident));
+        annotated.push((method, kind, fallible));
+    }
+    // `try_` wrappers share the handle trait with every other generated method.
+    for (method, _, fallible) in &annotated {
+        let Some(try_name) = fallible else {
+            continue;
+        };
+        if let Some((other, other_kind, _)) = annotated
+            .iter()
+            .find(|(other, ..)| other.sig.ident == *try_name)
+        {
+            let other_annotation = match other_kind {
+                Kind::Action => "#[action]",
+                Kind::Asynced => "#[asynced]",
+            };
+            return Err(syn::Error::new_spanned(
+                &method.sig.ident,
+                format!(
+                    "`#[asynced]` method `{}` generates the fallible handle method `{try_name}`, \
+                     which collides with the `{other_annotation}` method `{}`; rename one of \
+                     them or mark `{}` with `#[asynced(no_try)]`",
+                    method.sig.ident, other.sig.ident, method.sig.ident,
+                ),
+            ));
+        }
+    }
+    let mut signatures = Vec::new();
+    let mut implementations = Vec::new();
+    for (method, kind, fallible) in annotated {
+        let (signature, implementation) =
+            dispatched(&runtime, struct_type, method, kind, fallible)?;
         signatures.push(signature);
         implementations.push(implementation);
     }
