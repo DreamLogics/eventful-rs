@@ -399,6 +399,94 @@ returning a value, `weak_callback_or_else(handler, fallback)` requires an explic
 fallback closure receiving the same argument. Avoid capturing a strong reference
 to the owner inside either closure, which would reintroduce the cycle.
 
+Slint's `on_*` setters take one closure parameter per callback argument. The
+[`weak_callback!`] and [`weak_callback_or_else!`] macros downgrade the value and
+expand to a closure of the same shape, so they go straight into a setter of any
+arity, and the argument types are inferred from it:
+
+```rust
+use eventful_rs::*;
+use std::cell::{Cell, RefCell};
+declare_shard!(Ui, runtime = main);
+
+#[eventful(shard = Ui)]
+struct App {
+    saves: Cell<u32>,
+    keys: RefCell<Vec<String>>,
+}
+
+// Stands in for a generated Slint component with these callbacks:
+//     callback save();
+//     callback key(string, bool);
+//     callback width(int) -> int;
+#[derive(Default)]
+struct AppWindow {
+    save: RefCell<Option<Box<dyn FnMut()>>>,
+    key: RefCell<Option<Box<dyn FnMut(String, bool)>>>,
+    width: RefCell<Option<Box<dyn FnMut(i32) -> i32>>>,
+}
+impl AppWindow {
+    fn on_save(&self, f: impl FnMut() + 'static) {
+        self.save.replace(Some(Box::new(f)));
+    }
+    fn on_key(&self, f: impl FnMut(String, bool) + 'static) {
+        self.key.replace(Some(Box::new(f)));
+    }
+    fn on_width(&self, f: impl FnMut(i32) -> i32 + 'static) {
+        self.width.replace(Some(Box::new(f)));
+    }
+}
+
+// Owns the window and the strong reference; the callbacks hold weak ones.
+struct Controller {
+    app: ShardRc<App>,
+    ui: AppWindow,
+}
+impl Controller {
+    fn install(&self) {
+        // The macros take a variable name, so bind a field first.
+        let app = &self.app;
+        self.ui.on_save(weak_callback!(app => || app.saves.set(app.saves.get() + 1)));
+        self.ui.on_key(weak_callback!(app => |text, ctrl| {
+            if !ctrl {
+                app.keys.borrow_mut().push(text);
+            }
+        }));
+        self.ui.on_width(weak_callback_or_else!(
+            app => |columns| columns * app.saves.get() as i32,
+            |_| 0
+        ));
+    }
+}
+
+Ui::shard().run_main(|| async {
+    let app = App::bind_local(App {
+        saves: Cell::new(0),
+        keys: RefCell::default(),
+        events: Default::default(),
+    })?;
+    let controller = Controller { app, ui: AppWindow::default() };
+    controller.install();
+
+    let ui = &controller.ui;
+    ui.save.borrow_mut().as_mut().unwrap()();
+    ui.key.borrow_mut().as_mut().unwrap()("a".into(), false);
+    assert_eq!(ui.width.borrow_mut().as_mut().unwrap()(80), 80);
+    assert_eq!(*controller.app.keys.borrow(), ["a"]);
+    Ok::<(), InvokeError>(())
+})?;
+# Ok::<(), InvokeError>(())
+```
+
+The name before `=>` must be a variable holding a `ShardRc` or a `&ShardRc`; for
+a field, bind it first with `let app = &self.app;`. Inside the closure, the same
+name is rebound to the upgraded `&ShardRc` for the duration of the call, so the
+`move` closure can never capture the strong reference. The closure's parameters
+are the callback's arguments, written as names, `_`, or tuple patterns, each with
+an optional `: Type`. The fallback of `weak_callback_or_else!` receives the same
+arguments; a fallback with a different number of arguments is a compile error.
+The methods remain for code that wants a single-argument callback.
+
 ### Background work on a shard
 
 `Worker::spawn_local(future)` ([`ShardBinding::spawn_local`]) runs a future on a

@@ -22,6 +22,7 @@ pub type DeliveryError = InvokeError;
 mod shard_handle;
 pub use shard_handle::*;
 mod connection;
+mod weak_callback;
 pub use connection::*;
 mod local_task;
 pub use local_task::{LocalTask, TaskHandle};
