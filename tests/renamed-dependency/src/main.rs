@@ -58,8 +58,8 @@ async fn main() -> Result<(), InvokeError> {
     let local = State::bind_local(State {
         events: Default::default(),
     })?;
-    ui.on_changed(weak_callback!(local, |local, value| local.events.changed().emit(value)));
-    let emit = weak_callback_or_else!(local, |local, value: usize| local.events.changed().emit(value), |_| ());
+    ui.on_changed(weak_callback!(local => |value| local.events.changed().emit(value)));
+    let emit = weak_callback_or_else!(local => |value: usize| local.events.changed().emit(value), |_| ());
     emit(3);
     ui.callback.borrow().as_ref().unwrap()(4);
     Ok(())

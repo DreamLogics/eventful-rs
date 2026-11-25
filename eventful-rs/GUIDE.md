@@ -437,38 +437,55 @@ impl AppWindow {
     }
 }
 
+// Owns the window and the strong reference; the callbacks hold weak ones.
+struct Controller {
+    app: ShardRc<App>,
+    ui: AppWindow,
+}
+impl Controller {
+    fn install(&self) {
+        // The macros take a variable name, so bind a field first.
+        let app = &self.app;
+        self.ui.on_save(weak_callback!(app => || app.saves.set(app.saves.get() + 1)));
+        self.ui.on_key(weak_callback!(app => |text, ctrl| {
+            if !ctrl {
+                app.keys.borrow_mut().push(text);
+            }
+        }));
+        self.ui.on_width(weak_callback_or_else!(
+            app => |columns| columns * app.saves.get() as i32,
+            |_| 0
+        ));
+    }
+}
+
 Ui::shard().run_main(|| async {
     let app = App::bind_local(App {
         saves: Cell::new(0),
         keys: RefCell::default(),
         events: Default::default(),
     })?;
-    let ui = AppWindow::default();
-    ui.on_save(weak_callback!(app, |app| app.saves.set(app.saves.get() + 1)));
-    ui.on_key(weak_callback!(app, |app, text, ctrl| {
-        if !ctrl {
-            app.keys.borrow_mut().push(text);
-        }
-    }));
-    ui.on_width(weak_callback_or_else!(app, |app, columns| columns * app.saves.get() as i32, |_| 0));
+    let controller = Controller { app, ui: AppWindow::default() };
+    controller.install();
 
+    let ui = &controller.ui;
     ui.save.borrow_mut().as_mut().unwrap()();
     ui.key.borrow_mut().as_mut().unwrap()("a".into(), false);
     assert_eq!(ui.width.borrow_mut().as_mut().unwrap()(80), 80);
-    assert_eq!(*app.keys.borrow(), ["a"]);
+    assert_eq!(*controller.app.keys.borrow(), ["a"]);
     Ok::<(), InvokeError>(())
 })?;
 # Ok::<(), InvokeError>(())
 ```
 
-The first argument is the `ShardRc` to downgrade. Inside the closure, the first
-parameter is bound to a `&ShardRc` for the duration of the call; the remaining
-parameters are the callback's arguments, written as names, `_`, or tuple patterns,
-each with an optional `: Type`. Give the first parameter the same name as the
-value: the closure is `move`, so naming the strong reference in the body would
-capture it. The fallback of `weak_callback_or_else!` receives the same arguments,
-written `|| value` when there are none. The methods remain for code that wants a
-single-argument callback.
+The name before `=>` must be a variable holding a `ShardRc` or a `&ShardRc`; for
+a field, bind it first with `let app = &self.app;`. Inside the closure, the same
+name is rebound to the upgraded `&ShardRc` for the duration of the call, so the
+`move` closure can never capture the strong reference. The closure's parameters
+are the callback's arguments, written as names, `_`, or tuple patterns, each with
+an optional `: Type`. The fallback of `weak_callback_or_else!` receives the same
+arguments; a fallback with a different number of arguments is a compile error.
+The methods remain for code that wants a single-argument callback.
 
 ### Background work on a shard
 

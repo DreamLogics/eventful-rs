@@ -107,16 +107,19 @@ mod shadowed_callbacks {
         let __eventful_weak = 1;
         let __eventful_value = 2;
         let __eventful_arg = 3;
-        let add = eventful_rs::weak_callback!(source, |source, a, (b, c)| {
+        let add = eventful_rs::weak_callback!(source => |a, (b, c)| {
             source.value.set(source.value.get() + a + b + c);
             assert_eq!(__eventful_weak + __eventful_value + __eventful_arg, 6);
         });
         add(1, (2, 3));
+        let reset = eventful_rs::weak_callback!(source => || source.value.set(11));
+        reset();
         let read = eventful_rs::weak_callback_or_else!(
-            source,
-            |source, _: u32| source.value.get(),
+            source => |_: u32| source.value.get(),
             |_| 0,
         );
+        let total = eventful_rs::weak_callback_or_else!(source => || source.value.get(), || 0);
+        assert_eq!(total(), 11);
         assert_eq!(read(0), 11);
     }
 }

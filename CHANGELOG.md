@@ -5,9 +5,12 @@
 - Added the `weak_callback!` and `weak_callback_or_else!` macros, which take a
   callback's arguments as they are, so a weak callback goes straight into a Slint
   `on_*` setter of any arity:
-  `ui.on_key(weak_callback!(app, |app, text, ctrl| app.key(text, ctrl)))`.
-  Argument types are inferred from the setter. `ShardRc::weak_callback` and
-  `weak_callback_or_else` are unchanged and still take a single (tuple) argument.
+  `ui.on_key(weak_callback!(app => |text, ctrl| app.key(text, ctrl)))`.
+  Argument types are inferred from the setter. Inside the closure, `app` is
+  rebound to the upgraded reference, so the callback cannot capture the strong
+  owner; bind a field first with `let app = &self.app;`. `ShardRc::weak_callback`
+  and `weak_callback_or_else` are unchanged and still take a single (tuple)
+  argument.
 
 ## 0.2.3 - 2026-11-24
 

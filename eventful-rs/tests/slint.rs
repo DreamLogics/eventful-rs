@@ -97,6 +97,22 @@ where
     ));
 }
 
+/// Installs callbacks from a field, which must be bound to a variable first.
+struct CallbackController {
+    app: ShardRc<CallbackApp>,
+}
+impl CallbackController {
+    fn install(&self, ui: &WeakCallbackUi) {
+        use eventful_rs::{weak_callback, weak_callback_or_else};
+        let app = &self.app;
+        ui.on_save(weak_callback!(app => || app.record("save".into())));
+        ui.on_count(weak_callback_or_else!(
+            app => || app.log.borrow().len() as i32,
+            || -1
+        ));
+    }
+}
+
 /// The callback macros go straight into generated `on_*` setters of any arity.
 async fn weak_callback_macros_fit_slint_setters() {
     use eventful_rs::{weak_callback, weak_callback_or_else};
@@ -108,38 +124,24 @@ async fn weak_callback_macros_fit_slint_setters() {
     })
     .unwrap();
     let ui = WeakCallbackUi::new().unwrap();
-    ui.on_save(weak_callback!(app, |app| app.record("save".into())));
-    ui.on_rename(weak_callback!(app, |app, name| app.record(format!("rename {name}"))));
+    // A `&ShardRc` owner, from a field.
+    let controller = CallbackController { app: app.clone() };
+    controller.install(&ui);
+    // A `ShardRc` owner.
+    ui.on_rename(weak_callback!(app => |name| app.record(format!("rename {name}"))));
     // Annotations and `_` patterns are accepted.
-    ui.on_key_pressed(weak_callback!(app, |app, text, ctrl: bool, _| {
+    ui.on_key_pressed(weak_callback!(app => |text, ctrl: bool, _| {
         app.record(format!("key {text} {ctrl}"))
     }));
-    ui.on_wide(weak_callback!(app, |app,
-                                    a,
-                                    b,
-                                    c,
-                                    d,
-                                    e,
-                                    f,
-                                    g,
-                                    h,
-                                    i,
-                                    j,
-                                    k,
-                                    l,
-                                    m| {
-        let sum = a + b + c + d + e + f + g + h + i + j + k + l + m;
-        app.record(format!("wide {sum}"));
-    }));
+    ui.on_wide(
+        weak_callback!(app => |a, b, c, d, e, f, g, h, i, j, k, l, m| {
+            let sum = a + b + c + d + e + f + g + h + i + j + k + l + m;
+            app.record(format!("wide {sum}"));
+        }),
+    );
     ui.on_scale(weak_callback_or_else!(
-        app,
-        |app, value, offset| value * app.factor + offset,
+        app => |value, offset| value * app.factor + offset,
         |value, _| -value,
-    ));
-    ui.on_count(weak_callback_or_else!(
-        app,
-        |app: &ShardRc<CallbackApp>| app.log.borrow().len() as i32,
-        || -1
     ));
 
     ui.invoke_save();
@@ -153,10 +155,15 @@ async fn weak_callback_macros_fit_slint_setters() {
         ["save", "rename draft", "key k true", "wide 91"]
     );
 
-    // The callbacks hold no strong reference, so the value is still collected.
+    // The callbacks hold no strong reference: with `ui` and every callback still
+    // alive, dropping the strong owners lets the shard destroy the value, which
+    // releases its clone of `log`.
     let weak = ShardRc::downgrade(&app);
+    assert_eq!(Rc::strong_count(&log), 2);
+    drop(controller);
     drop(app);
     wait_for_collection(&weak).await;
+    assert_eq!(Rc::strong_count(&log), 1);
     ui.invoke_save();
     ui.invoke_rename("ignored".into());
     ui.invoke_key_pressed("x".into(), false, false);
