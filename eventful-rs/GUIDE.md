@@ -233,6 +233,50 @@ code into modules, use `#[asynchronize(pub)]` and import the generated extension
 trait at the call site. If a command needs no result, `#[action]` queues it
 immediately, including from synchronous code.
 
+A call such as `importer.total().await` panics if it cannot complete: the
+shard has closed, a weak handle's target is gone, or the method panicked.
+Each `#[asynced]` method therefore also gets a `try_` form, here `try_total`,
+that returns [`InvokeError`] instead. Use it where the caller may outlive the
+shard or the value, such as a background task that finishes during shutdown:
+
+```rust
+use eventful_rs::*;
+use std::cell::Cell;
+
+declare_shard!(Main, runtime = main);
+declare_shard!(Worker, runtime = std);
+
+#[eventful(shard = Worker)]
+struct Importer {
+    total: Cell<usize>,
+}
+
+#[asynchronize]
+impl Importer {
+    #[asynced]
+    fn total(&self) -> usize {
+        self.total.get()
+    }
+}
+
+#[sharded_main(Main)]
+async fn main() -> Result<(), InvokeError> {
+    let importer = Importer::spawn(|| Importer {
+        total: Cell::new(0),
+        events: Default::default(),
+    }).await?;
+    assert_eq!(importer.try_total().await, Ok(0));
+
+    // Once the worker stops, the call reports an error instead of panicking.
+    Worker::handle().request_shutdown();
+    assert_eq!(importer.try_total().await, Err(InvokeError::Closed));
+    Ok(())
+}
+```
+
+A `try_` name that collides with another dispatched method in the same `impl`
+is a compile error; `#[asynced(no_try)]` skips the fallible form for a method.
+
 Use events when other parts of the application need to react to a change.
 `self.events.imported().emit(name)` queues progress without waiting for listeners;
 `self.events.imported().tracked().emit(name).await?` waits for their handlers. In our example,

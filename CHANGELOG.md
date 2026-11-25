@@ -15,6 +15,21 @@
   owner; bind a field first with `let app = &self.app;`. `ShardRc::weak_callback`
   and `weak_callback_or_else` are unchanged and still take a single (tuple)
   argument.
+- Every `#[asynced]` method now also generates a fallible `try_<name>` handle
+  method returning `Result<R, InvokeError>`, on both strong and weak handles.
+  It reports a closed shard, an expired or mismatched target, cancellation, or
+  a panicking method instead of panicking in the caller like the plain method.
+  Mark a method `#[asynced(no_try)]` to skip it.
+- Migration: a generated `try_<name>` that collides with another `#[asynced]` or
+  `#[action]` method in the same impl, for example `count` and `try_count`, is
+  now a compile error. So is one that would be shadowed by an inherent handle
+  method: `try_deferred_upgrade_in_shard`, `try_from_ref`, or `try_local` (for
+  example from an `#[asynced] fn local`). Rename the method or add
+  `#[asynced(no_try)]`. Other arguments to `#[asynced]` are rejected instead
+  of ignored.
+- Added `ShardHandle::try_deferred_upgrade_in_shard`, so strong handles can
+  dispatch fallibly without downgrading first. `ShardWeakHandle`'s inherent
+  method of the same name is unchanged.
 
 ## 0.2.3 - 2026-11-24
 
