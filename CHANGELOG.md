@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.4 - 2026-11-25
 
 - `#[slint_events]` accepts `global = GlobalType` in place of `component = ComponentType`
   to bridge callbacks declared on a Slint global. The generated `new` takes the
