@@ -533,6 +533,61 @@ are also available through the generated subscription API. A bridge with no enab
 callbacks cannot be bulk-connected. Conditional callback declarations propagate
 to the registrations as well as the event interface.
 
+#### Callbacks on Slint globals
+
+Callbacks declared on a Slint global are installed on the global's handle rather
+than on a component. Use `global = GlobalType` instead of `component`, and pass
+the handle from `ui.global::<GlobalType>()` to `new`:
+
+```rust,no_run
+# #[cfg(feature = "slint")]
+# mod example {
+use eventful_rs::*;
+slint::slint! {
+    #[edition = "1.19"]
+    export global Navigator {
+        callback open-project(string);
+        callback back();
+    }
+    export component AppWindow inherits Window {}
+}
+declare_shard!(UiShard, runtime = slint);
+
+#[slint_events(global = Navigator)]
+trait NavigatorEvents {
+    fn open_project(&self, id: slint::SharedString);
+    fn back(&self);
+}
+
+#[eventful(shard = UiShard)]
+struct App {
+    ui: AppWindow,
+    navigator_events: NavigatorEventsBridge,
+}
+impl NavigatorEvents for App {
+    fn open_project(&self, id: slint::SharedString) { /* show the project */ }
+    fn back(&self) { /* go back */ }
+}
+
+# fn run() -> Result<(), Box<dyn std::error::Error>> {
+let ui = AppWindow::new()?;
+let navigator_events = NavigatorEventsBridge::new(&ui.global::<Navigator>());
+let app = App::bind_local(App {
+    ui, navigator_events, events: Default::default(),
+})?;
+app.navigator_events.connect_to(&app);
+# Ok(())
+# }
+# }
+# fn main() {}
+```
+
+`new` takes `&Navigator<'_>`, so the bridge does not depend on which component
+exports the global. It does not keep the handle: the borrow of the component ends
+when `new` returns. Give exactly one of `component` or `global`. Everything else
+works as for components: argument types, no return values or labels, the reserved
+names, and weak forwarding that stops when the bridge is dropped.
+
 ## Distinguishing sources and connecting methods
 
 `#[events]` adds a defaulted role parameter to the listener trait. The producer

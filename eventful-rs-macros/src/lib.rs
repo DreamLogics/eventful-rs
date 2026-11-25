@@ -63,9 +63,15 @@ pub fn events(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// The same module-level and reserved-name rules as `#[events]` apply, and
 /// `connect_to` is also reserved by the bridge.
 ///
+/// For callbacks declared on a Slint global, use `global = MyGlobal` instead:
+/// `#[slint_events(global = Navigator)] trait NavigatorEvents { fn back(&self); }`
+/// generates `NavigatorEventsBridge::new(&ui.global::<Navigator>())`, which takes
+/// the global's handle (`&Navigator<'_>`) and installs its `on_*` setters. Give
+/// exactly one of `component` or `global`; all other rules are the same.
+///
 /// Only callbacks without return values are supported. Installation replaces
 /// existing handlers for the listed callbacks. The bridge does not retain the
-/// component, and callbacks reference the bridge weakly. Dropping it disables
+/// component or global handle, and callbacks reference the bridge weakly. Dropping it disables
 /// forwarding without removing subsequently installed handlers.
 #[proc_macro_attribute]
 pub fn slint_events(attr: TokenStream, item: TokenStream) -> TokenStream {

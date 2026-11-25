@@ -50,6 +50,11 @@ struct CallbackOwner {
 
 slint::slint! {
     #[edition = "1.19"]
+    export global BridgeTestNavigator {
+        callback back();
+        callback open-project(string);
+        callback move-item(string, int, bool);
+    }
     export component BridgeTestUi inherits Window {
         callback save();
         callback edit-paragraph(string, int);
@@ -76,6 +81,32 @@ impl UiActions for BridgedWindow {
     }
     fn edit_paragraph(&self, id: slint::SharedString, index: i32) {
         self.calls.borrow_mut().push(format!("{id}:{index}"));
+    }
+}
+
+#[eventful_rs::slint_events(global = BridgeTestNavigator)]
+trait NavigatorActions {
+    fn back(&self);
+    fn open_project(&self, id: slint::SharedString);
+    fn move_item(&self, id: slint::SharedString, index: i32, up: bool);
+}
+
+#[eventful_rs::eventful(shard = Ui)]
+struct Navigation {
+    bridge: RefCell<Option<NavigatorActionsBridge>>,
+    calls: RefCell<Vec<String>>,
+}
+impl NavigatorActions for Navigation {
+    fn back(&self) {
+        self.calls.borrow_mut().push("back".into());
+    }
+    fn open_project(&self, id: slint::SharedString) {
+        self.calls.borrow_mut().push(format!("open:{id}"));
+    }
+    fn move_item(&self, id: slint::SharedString, index: i32, up: bool) {
+        self.calls
+            .borrow_mut()
+            .push(format!("move:{id}:{index}:{up}"));
     }
 }
 
@@ -250,6 +281,48 @@ fn slint_runs_non_send_work_on_ui_thread_and_drains_before_quit() {
             .unwrap();
         assert_eq!(window.calls.borrow().len(), 6);
         drop((retained_events, retained_new_events));
+
+        // Callbacks on a Slint global forward through a bridge built from its handle.
+        let navigator = window.ui.global::<BridgeTestNavigator>();
+        let navigation = Navigation::bind_local(Navigation {
+            bridge: RefCell::new(Some(NavigatorActionsBridge::new(&navigator))),
+            calls: RefCell::default(),
+            events: Default::default(),
+        })
+        .unwrap();
+        navigation
+            .bridge
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .connect_to(&navigation);
+        navigator.invoke_back();
+        navigator.invoke_open_project("alpha".into());
+        navigator.invoke_move_item("beta".into(), 3, true);
+        assert!(navigation.calls.borrow().is_empty()); // Delivery is queued.
+        Ui::shard()
+            .handle()
+            .try_invoke_tracked(|| {})
+            .await
+            .unwrap();
+        assert_eq!(
+            *navigation.calls.borrow(),
+            ["back", "open:alpha", "move:beta:3:true"]
+        );
+        // Dropping the global bridge stops forwarding, even with retained event storage.
+        let bridge = navigation.bridge.take().unwrap();
+        let retained_navigator_events = bridge.events().clone();
+        drop(bridge);
+        navigator.invoke_back();
+        navigator.invoke_open_project("gamma".into());
+        navigator.invoke_move_item("delta".into(), 1, false);
+        Ui::shard()
+            .handle()
+            .try_invoke_tracked(|| {})
+            .await
+            .unwrap();
+        assert_eq!(navigation.calls.borrow().len(), 3);
+        drop((retained_navigator_events, navigation, navigator));
 
         let weak_window = ShardRc::downgrade(&window);
         drop(window); // UI -> callback -> bridge -> receiver must not form a cycle.

@@ -1,0 +1,7 @@
+error: expected exactly one of `component = ComponentType` or `global = GlobalType`
+ --> tests/ui/slint_missing_target.rs:3:1
+  |
+3 | #[slint_events]
+  | ^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `slint_events` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `#[slint_events]` accepts `global = GlobalType` in place of `component = ComponentType`
+  to bridge callbacks declared on a Slint global. The generated `new` takes the
+  global's handle, as in `NavigatorEventsBridge::new(&ui.global::<Navigator>())`.
+  Giving both `component` and `global`, or neither, is an error.
+
 ## 0.2.3 - 2026-11-24
 
 - The `slint` feature now requires Slint 1.19.
