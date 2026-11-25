@@ -6,41 +6,80 @@ use syn::{
     parse_macro_input,
 };
 
-/// Component type whose generated `on_*` methods install the callbacks.
+/// The Slint type whose generated `on_*` methods install the callbacks.
+enum Target {
+    /// Rust path of a Slint-generated component, passed as `&Component`.
+    Component(Path),
+    /// Rust path of a Slint-generated global, passed as its handle `&Global<'_>`.
+    Global(Path),
+}
+
+/// Parsed `component = Path` or `global = Path` attribute arguments.
 struct Arguments {
-    /// Rust path of a Slint-generated component.
-    component: Path,
+    /// Exactly one component or global.
+    target: Target,
 }
 impl Parse for Arguments {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let key: syn::Ident = input.parse()?;
-        if key != "component" {
-            return Err(syn::Error::new_spanned(
-                key,
-                "expected component = ComponentType",
-            ));
-        }
-        input.parse::<Token![=]>()?;
-        let component = input.parse()?;
-        if input.peek(Token![,]) {
+        /// Message for missing, unknown, or conflicting keys.
+        const EXPECTED: &str =
+            "expected exactly one of `component = ComponentType` or `global = GlobalType`";
+        let mut target: Option<Target> = None;
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            let is_global = if key == "component" {
+                false
+            } else if key == "global" {
+                true
+            } else {
+                return Err(syn::Error::new_spanned(key, EXPECTED));
+            };
+            input.parse::<Token![=]>()?;
+            let path: Path = input.parse()?;
+            match (&target, is_global) {
+                (None, _) => {}
+                (Some(Target::Component(_)), false) | (Some(Target::Global(_)), true) => {
+                    return Err(syn::Error::new_spanned(
+                        &key,
+                        format!("duplicate `{key}` argument"),
+                    ));
+                }
+                (Some(_), _) => {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "give either `component = ComponentType` or `global = GlobalType`, not both",
+                    ));
+                }
+            }
+            target = Some(if is_global {
+                Target::Global(path)
+            } else {
+                Target::Component(path)
+            });
+            if input.is_empty() {
+                break;
+            }
             input.parse::<Token![,]>()?;
         }
-        Ok(Self { component })
+        match target {
+            Some(target) => Ok(Self { target }),
+            None => Err(syn::Error::new(proc_macro2::Span::call_site(), EXPECTED)),
+        }
     }
 }
 
 /// Expand the ordinary event interface plus an owner for weak callback forwarding.
 pub(crate) fn slint_events(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let Arguments { component } = parse_macro_input!(attr as Arguments);
+    let Arguments { target } = parse_macro_input!(attr as Arguments);
     let interface = parse_macro_input!(item as ItemTrait);
-    match expand(component, interface) {
+    match expand(target, interface) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
 }
 
 /// Generate a bridge without referring to the downstream Slint dependency name.
-fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::TokenStream> {
+fn expand(target: Target, interface: ItemTrait) -> syn::Result<proc_macro2::TokenStream> {
     let runtime = crate::runtime_path();
     let name = &interface.ident;
     let visibility = &interface.vis;
@@ -50,6 +89,13 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
     let connections = format_ident!("{}Connections", name);
     let signals_ext = format_ident!("{}SignalsExt", name);
     let item_cfg = crate::attributes::conditions(&interface.attrs)?;
+    let (handle, handle_type, kind) = match &target {
+        Target::Component(path) => (format_ident!("component"), quote!(#path), "component"),
+        Target::Global(path) => (format_ident!("global"), quote!(#path<'_>), "global"),
+    };
+    let struct_doc =
+        format!(" Owns forwarding from the {kind}'s declared callbacks into typed events.");
+    let new_doc = format!(" No {kind} or receiver is retained by the installed callbacks.");
     let mut registrations = Vec::new();
     let mut enabled = Vec::new();
     for item in &interface.items {
@@ -105,7 +151,7 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
             #(#cfg)*
             {
                 let #source = ::std::rc::Rc::downgrade(&events);
-                component.#setter(move |#(#args),*| {
+                #handle.#setter(move |#(#args),*| {
                     if let ::core::option::Option::Some(#source) = #source.upgrade() {
                         #source.#method_name().emit(#(#args),*);
                     }
@@ -119,9 +165,9 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
     Ok(quote! {
         #events
 
-        /// Owns forwarding from the component's declared callbacks into typed events.
+        #[doc = #struct_doc]
         /// Keep this bridge alive, typically in the wrapper struct. It retains no UI
-        /// component. Dropping it disables forwarding even if signal storage survives.
+        /// component or global handle. Dropping it disables forwarding even if signal storage survives.
         /// Installing a bridge replaces existing handlers for the declared callbacks.
         /// Dropping an old bridge does not remove handlers installed afterwards.
         #(#item_cfg)*
@@ -136,8 +182,8 @@ fn expand(component: Path, interface: ItemTrait) -> syn::Result<proc_macro2::Tok
         impl #bridge {
             /// Install forwarding on the UI thread for each declared Slint callback.
             /// Handlers are replaced, not chained. Delivery to receivers is queued.
-            /// No component or receiver is retained by the installed callbacks.
-            #visibility fn new(component: &#component) -> Self {
+            #[doc = #new_doc]
+            #visibility fn new(#handle: &#handle_type) -> Self {
                 let events = ::std::rc::Rc::new(<#emissions as ::core::default::Default>::default());
                 #(#registrations)*
                 Self { events }

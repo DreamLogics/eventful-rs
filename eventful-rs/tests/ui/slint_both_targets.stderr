@@ -1,0 +1,5 @@
+error: give either `component = ComponentType` or `global = GlobalType`, not both
+ --> tests/ui/slint_both_targets.rs:3:32
+  |
+3 | #[slint_events(component = Ui, global = Navigator)]
+  |                                ^^^^^^
