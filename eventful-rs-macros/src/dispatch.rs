@@ -356,6 +356,14 @@ fn generates_try(attr: &Attribute) -> syn::Result<bool> {
     }
 }
 
+/// Inherent `try_*` methods and associated functions of `ShardRcHandle<T>` and
+/// `ShardWeakHandle<T>`. A generated `try_<name>` with one of these names would
+/// be shadowed by the inherent item in method-call syntax, so it is rejected.
+///
+/// Keep this in sync with the inherent impls in `eventful-rs/src`; the
+/// `handle_try_methods_match_runtime_sources` test checks it.
+const HANDLE_TRY_METHODS: &[&str] = &["try_deferred_upgrade_in_shard", "try_from_ref", "try_local"];
+
 /// Expand a parsed inherent impl into the original impl plus the handle trait.
 fn expand(
     visibility: syn::Visibility,
@@ -406,6 +414,17 @@ fn expand(
         let Some(try_name) = fallible else {
             continue;
         };
+        if let Some(existing) = HANDLE_TRY_METHODS.iter().find(|name| try_name == *name) {
+            return Err(syn::Error::new_spanned(
+                &method.sig.ident,
+                format!(
+                    "`#[asynced]` method `{}` generates the fallible handle method `{try_name}`, \
+                     which would be shadowed by the existing handle method `{existing}`; rename \
+                     the method or mark it with `#[asynced(no_try)]`",
+                    method.sig.ident,
+                ),
+            ));
+        }
         if let Some((other, other_kind, _)) = annotated
             .iter()
             .find(|(other, ..)| other.sig.ident == *try_name)
@@ -464,4 +483,69 @@ fn expand(
             #(#implementations)*
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeSet, path::Path};
+    use syn::visit::Visit;
+
+    /// Collect inherent `try_*` items of the strong and weak handle types.
+    #[derive(Default)]
+    struct HandleTryMethods(BTreeSet<String>);
+    impl<'a> Visit<'a> for HandleTryMethods {
+        fn visit_item_impl(&mut self, item: &'a syn::ItemImpl) {
+            let handle = match &*item.self_ty {
+                syn::Type::Path(path) => path.path.segments.last().is_some_and(|segment| {
+                    segment.ident == "ShardRcHandle" || segment.ident == "ShardWeakHandle"
+                }),
+                _ => false,
+            };
+            if handle && item.trait_.is_none() {
+                for member in &item.items {
+                    if let syn::ImplItem::Fn(method) = member {
+                        let name = method.sig.ident.to_string();
+                        if name.starts_with("try_") {
+                            self.0.insert(name);
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_item_impl(self, item);
+        }
+    }
+
+    /// Parse every source file below `dir`.
+    fn visit_sources(dir: &Path, found: &mut HandleTryMethods) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit_sources(&path, found);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                let file = syn::parse_file(&source)
+                    .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+                found.visit_file(&file);
+            }
+        }
+    }
+
+    #[test]
+    fn handle_try_methods_match_runtime_sources() {
+        let runtime = Path::new(env!("CARGO_MANIFEST_DIR")).join("../eventful-rs/src");
+        if !runtime.is_dir() {
+            // Packaged crates do not include the runtime sources.
+            return;
+        }
+        let mut found = HandleTryMethods::default();
+        visit_sources(&runtime, &mut found);
+        let listed: BTreeSet<String> = super::HANDLE_TRY_METHODS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(
+            found.0, listed,
+            "update HANDLE_TRY_METHODS to match the inherent handle methods"
+        );
+    }
 }

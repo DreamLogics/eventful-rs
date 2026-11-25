@@ -34,4 +34,14 @@ impl UnknownOption {
     }
 }
 
+#[eventful(shard = DynamicShard)]
+struct ShadowedByHandle;
+#[asynchronize]
+impl ShadowedByHandle {
+    #[asynced]
+    fn local(&self) -> usize {
+        0
+    }
+}
+
 fn main() {}

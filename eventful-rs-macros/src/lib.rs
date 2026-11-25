@@ -143,8 +143,9 @@ pub fn action(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```
 ///
 /// A `try_name` that collides with another `#[asynced]` or `#[action]` method in
-/// the same impl is a compile error. Write `#[asynced(no_try)]` to skip the
-/// fallible wrapper for a method.
+/// the same impl, or that an inherent handle method such as `try_local` would
+/// shadow, is a compile error. Write `#[asynced(no_try)]` to skip the fallible
+/// wrapper for a method.
 #[proc_macro_attribute]
 pub fn asynced(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item

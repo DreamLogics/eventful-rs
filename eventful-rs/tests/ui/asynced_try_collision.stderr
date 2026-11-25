@@ -15,3 +15,9 @@ error: unsupported `#[asynced]` option; expected `no_try`
    |
 31 |     #[asynced(no_retry)]
    |               ^^^^^^^^
+
+error: `#[asynced]` method `local` generates the fallible handle method `try_local`, which would be shadowed by the existing handle method `try_local`; rename the method or mark it with `#[asynced(no_try)]`
+  --> tests/ui/asynced_try_collision.rs:42:8
+   |
+42 |     fn local(&self) -> usize {
+   |        ^^^^^
